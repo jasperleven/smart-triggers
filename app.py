@@ -1,8 +1,11 @@
 import streamlit as st
 import pandas as pd
-import json
+import os
+from gpt4all import GPT4All
 
-# --- 1. Список триггеров ---
+# -----------------------------
+# 1. Настройки триггеров
+# -----------------------------
 TRIGGERS = [
     "negative",
     "complaint",
@@ -15,73 +18,57 @@ TRIGGERS = [
     "irony_sarcasm"
 ]
 
-# --- 2. Prompt для AI (для будущей интеграции с реальным LLM) ---
-PROMPT_TEMPLATE = """
-You are a text classification AI.
+# -----------------------------
+# 2. Инициализация GPT4All
+# -----------------------------
+MODEL_PATH = "ggml-gpt4all-j-v1.3-groovy.bin"
 
-Classify the Russian text into ONE main trigger from the list:
+# Скачивание модели при первом запуске (если файла нет)
+if not os.path.exists(MODEL_PATH):
+    st.info("Скачиваем модель GPT4All...")
+    # Пример: можно дать ссылку на официальный источник
+    # os.system(f"wget -O {MODEL_PATH} <ссылка-на-модель>")
+    st.warning("Скачайте модель вручную и положите в папку с app.py")
+else:
+    st.success("Модель найдена, инициализация AI...")
+    
+model = GPT4All(MODEL_PATH)
 
-negative
-complaint
-spam
-positive
-suggestion
-question
-news_info
-discussion
-irony_sarcasm
-
-Return JSON:
-{{
-  "main_trigger": "<trigger>",
-  "confidence": <0-1>
-}}
-
-Text:
-"{text}"
-"""
-
-# --- 3. Заглушка AI функции (MVP) ---
-def ai_classify(text):
-    text_lower = text.lower()
-
-    # 1. Negative
-    if any(w in text_lower for w in ["надоел", "ужас", "плохо", "ненавижу", "достало", "бесит", "отвратительно", "кошмар"]):
-        return "negative", 0.9
-
-    # 2. Complaint
-    elif any(w in text_lower for w in ["парковка", "дорога", "проблема", "не работает", "сломалось", "очередь"]):
-        return "complaint", 0.9
-
-    # 3. Spam
-    elif any(w in text_lower for w in ["подпишись", "заработок", "доход", "крипта", "казино", "ставки"]):
-        return "spam", 0.9
-
-    # 4. Positive
-    elif any(w in text_lower for w in ["отлично", "спасибо", "круто", "супер"]):
-        return "positive", 0.9
-
-    # 5. Suggestion
-    elif any(w in text_lower for w in ["можно было бы", "предлагаю", "рекомендую"]):
-        return "suggestion", 0.8
-
-    # 6. Question
-    elif "?" in text_lower or any(w in text_lower for w in ["почему", "как", "когда", "что"]):
-        return "question", 0.8
-
-    # 7. News / Info
-    elif any(w in text_lower for w in ["новость", "событие", "сообщение"]):
-        return "news_info", 0.7
-
-    # 8. Discussion
-    else:
+# -----------------------------
+# 3. Функция классификации
+# -----------------------------
+def ai_classify(text: str):
+    prompt = f"""
+    Классифицируй текст на один из триггеров:
+    {', '.join(TRIGGERS)}
+    
+    Текст: "{text}"
+    
+    Верни JSON:
+    {{
+      "main_trigger": "<trigger>",
+      "confidence": <0-1>
+    }}
+    """
+    response = model.generate(prompt)
+    import json
+    try:
+        json_line = response.split("\n")[0]
+        result = json.loads(json_line)
+        trigger = result.get("main_trigger", "discussion")
+        confidence = float(result.get("confidence", 0.6))
+        return trigger, confidence
+    except Exception:
         return "discussion", 0.6
 
-# --- 4. Streamlit UI ---
-st.title("Smart Triggers — AI классификация текста")
-st.write("Загрузка текста или CSV для определения триггеров")
+# -----------------------------
+# 4. Streamlit UI
+# -----------------------------
+st.title("Smart Triggers — локальный AI")
+st.write("Определение триггеров текста с использованием GPT4All")
 
-uploaded_file = st.file_uploader("Выберите CSV файл с колонкой 'text'", type=["csv"])
+# Загрузка CSV
+uploaded_file = st.file_uploader("Загрузите CSV с колонкой 'text'", type=["csv"])
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
     if "text" not in df.columns:
@@ -100,7 +87,6 @@ if uploaded_file is not None:
         df_result = pd.DataFrame(results)
         st.write(df_result)
 
-        # Сохраняем CSV с utf-8-sig чтобы русские символы отображались корректно
         csv = df_result.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
             label="Скачать результат",
@@ -109,9 +95,12 @@ if uploaded_file is not None:
             mime="text/csv"
         )
 
-st.write("Пример текста:")
-st.write("`надоела эта парковка` → main_trigger: complaint, confidence: 90%")
-st.write("`подпишись и заработай на крипте` → main_trigger: spam, confidence: 90%")
-st.write("`мэр снова ничего не сделал` → main_trigger: discussion, confidence: 60%")
-st.write("`всё работает отлично` → main_trigger: positive, confidence: 90%")
-
+# Поле для ввода текста напрямую
+st.write("Или попробуйте ввести текст вручную:")
+user_text = st.text_area("Введите текст")
+if st.button("Классифицировать"):
+    if user_text:
+        trigger, confidence = ai_classify(user_text)
+        st.write(f"**Триггер:** {trigger} | **Confidence:** {round(confidence*100,2)}%")
+    else:
+        st.warning("Введите текст для классификации")
