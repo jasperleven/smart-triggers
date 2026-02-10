@@ -21,7 +21,7 @@ TRIGGERS = {
 
 HF_API_URL = "https://api-inference.huggingface.co/models/<ваша_модель>"
 HF_TOKEN = "<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>"
-HEADERS = {"Authorization": f"Bearer {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}"}
+HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
 
 # =====================
 # Функции анализа
