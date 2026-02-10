@@ -2,6 +2,7 @@ import os
 import streamlit as st
 import pandas as pd
 import requests
+import io
 
 # =====================
 # НАСТРОЙКИ
@@ -43,7 +44,7 @@ def local_trigger(text: str):
     return None, None
 
 # =====================
-# AI АНАЛИЗ (HF)
+# AI АНАЛИЗ
 # =====================
 def ai_trigger(text: str):
     prompt = (
@@ -95,11 +96,34 @@ def analyze_texts(texts):
     return pd.DataFrame(rows)
 
 # =====================
+# ЧТЕНИЕ ФАЙЛА (УЛЬТРА НАДЁЖНО)
+# =====================
+def read_any_text_file(uploaded_file):
+    raw = uploaded_file.read()
+
+    for enc in ["utf-8-sig", "utf-8", "cp1251"]:
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError("Не удалось определить кодировку файла")
+
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+    # если первая строка = text → пропускаем
+    if lines and lines[0].lower() == "text":
+        lines = lines[1:]
+
+    return pd.DataFrame({"text": lines})
+
+# =====================
 # STREAMLIT UI
 # =====================
 st.set_page_config(page_title="Smart Triggers AI", layout="centered")
 st.title("Smart Triggers AI")
-st.write("AI-классификация текстов по триггерам")
+st.write("AI-анализ текстов и CSV без проблем с форматами")
 
 # ---- Ручной ввод
 user_text = st.text_area("Введите текст")
@@ -116,40 +140,25 @@ if st.button("Анализировать текст"):
             "text/csv"
         )
 
-# ---- Загрузка CSV
-uploaded_file = st.file_uploader("Или загрузите CSV (колонка text)", type="csv")
+# ---- Загрузка файла
+uploaded_file = st.file_uploader(
+    "Загрузите CSV / TXT / файл из Excel (одна строка = один текст)",
+    type=["csv", "txt"]
+)
 
 if uploaded_file:
     try:
-        try:
-            df_input = pd.read_csv(
-                uploaded_file,
-                encoding="utf-8-sig",
-                sep=None,
-                engine="python"
-            )
-        except UnicodeDecodeError:
-            df_input = pd.read_csv(
-                uploaded_file,
-                encoding="cp1251",
-                sep=None,
-                engine="python"
-            )
+        df_input = read_any_text_file(uploaded_file)
+        df_result = analyze_texts(df_input["text"].tolist())
 
-        df_input.columns = [c.strip().lower() for c in df_input.columns]
+        st.dataframe(df_result)
 
-        if "text" not in df_input.columns:
-            st.error("CSV должен содержать колонку 'text'")
-        else:
-            df_result = analyze_texts(df_input["text"].astype(str).tolist())
-            st.dataframe(df_result)
-
-            st.download_button(
-                "Скачать результат CSV",
-                df_result.to_csv(index=False, encoding="utf-8-sig"),
-                "smart_triggers_result.csv",
-                "text/csv"
-            )
+        st.download_button(
+            "Скачать результат CSV",
+            df_result.to_csv(index=False, encoding="utf-8-sig"),
+            "smart_triggers_result.csv",
+            "text/csv"
+        )
 
     except Exception as e:
         st.error(f"Ошибка обработки файла: {e}")
