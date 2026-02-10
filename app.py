@@ -8,87 +8,88 @@ import chardet
 # НАСТРОЙКИ
 # =====================
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-HF_TOKEN = os.getenv("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")  # вставляй свой токен в Secrets
+HF_TOKEN = os.getenv("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")
 
-HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
+HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
-# Кандидаты для AI (без "other")
-TRIGGERS = [
-    "negative",
-    "complaint",
-    "spam",
-    "praise",
-    "service",
-    "feature",
-    "warning",
-    "info",
-    "suggestion"
-]
-
-# Словарный усилитель (keywords)
-KEYWORDS = {
+# =====================
+# 10 триггеров с ключевыми словами
+# =====================
+TRIGGERS_KEYWORDS = {
     "negative": ["ненавижу", "достало", "бесит", "ужас"],
-    "complaint": ["проблема", "не работает", "очередь", "парковка"],
-    "spam": ["подпишись", "заработай", "крипта", "ставки"],
-    "praise": ["отлично", "супер", "круто"],
+    "complaint": ["проблема", "не работает", "сломалось", "парковка", "очередь"],
+    "spam": ["подпишись", "заработай", "крипта", "ставки", "казино"],
+    "praise": ["отлично", "супер", "круто", "хорошо"],
+    "service": ["обслуживание", "поддержка", "сервис", "доставка"],
+    "feature": ["функция", "опция", "интерфейс", "возможность"],
     "warning": ["ошибка", "сбой", "неудача"],
-    "suggestion": ["предложение", "идея", "совет", "улучшение"]
+    "info": ["информация", "новости", "обновление"],
+    "suggestion": ["предложение", "идея", "совет", "рекомендую"]
 }
+
+ALLOWED_TRIGGERS = list(TRIGGERS_KEYWORDS.keys())
 
 # =====================
 # ЧТЕНИЕ ФАЙЛА
 # =====================
 def read_uploaded_file(uploaded_file):
     raw = uploaded_file.read()
-    encoding = chardet.detect(raw)["encoding"]
-    text = raw.decode(encoding)
-
+    encoding = chardet.detect(raw)["encoding"] or "utf-8"
+    text = raw.decode(encoding, errors="ignore")
     lines = [l.strip() for l in text.splitlines() if l.strip()]
-    if lines[0].lower() == "text":
+    if lines and lines[0].lower() == "text":
         lines = lines[1:]
     return pd.DataFrame({"text": lines})
 
 # =====================
-# AI КЛАССИФИКАЦИЯ
+# ЛОКАЛЬНАЯ КЛАССИФИКАЦИЯ (keyword priority)
 # =====================
-def ai_classify(text):
-    payload = {"inputs": text, "parameters": {"candidate_labels": TRIGGERS}}
-    r = requests.post(HF_API_URL, headers=HEADERS, json=payload, timeout=20)
-    r.raise_for_status()
-    res = r.json()
-
-    label = res["labels"][0]
-    score = int(res["scores"][0] * 100)
-
-    # fallback для low-confidence → neutral
-    if score < 55:
-        label = "neutral"
-
-    return label, score
+def classify_local(text: str):
+    tl = text.lower()
+    for trig, words in TRIGGERS_KEYWORDS.items():
+        for w in words:
+            if w in tl:
+                return trig, 90
+    return None, None
 
 # =====================
-# KEYWORD BOOST
+# AI ФУНКЦИЯ (fallback)
 # =====================
-def keyword_boost(text, label, score):
-    text_l = text.lower()
-    for k, words in KEYWORDS.items():
-        if k == label:
-            for w in words:
-                if w in text_l:
-                    return min(score + 10, 95)
-    return score
+def classify_ai(text: str):
+    if not HF_TOKEN:
+        return "neutral", 40
+    prompt = (
+        "К какому из триггеров относится текст: "
+        f"{', '.join(ALLOWED_TRIGGERS)}?\n"
+        f"Текст: {text}"
+    )
+    try:
+        r = requests.post(
+            HF_API_URL,
+            headers=HEADERS,
+            json={"inputs": prompt},
+            timeout=15
+        )
+        r.raise_for_status()
+        result = r.json()
+        label = result["labels"][0]
+        score = int(result["scores"][0] * 100)
+        # Если модель вернула что-то из списка — принимаем
+        if label in ALLOWED_TRIGGERS:
+            return label, score
+    except Exception:
+        pass
+    return "neutral", 40
 
 # =====================
-# АНАЛИЗ ТЕКСТОВ
+# ОСНОВНАЯ
 # =====================
 def analyze(texts):
     rows = []
-    for i, text in enumerate(texts, 1):
-        try:
-            label, conf = ai_classify(text)
-            conf = keyword_boost(text, label, conf)
-        except Exception:
-            label, conf = "neutral", 40
+    for i, text in enumerate(texts, start=1):
+        label, conf = classify_local(text)
+        if not label:
+            label, conf = classify_ai(text)
         rows.append({
             "id": i,
             "text": text,
@@ -101,23 +102,20 @@ def analyze(texts):
 # STREAMLIT UI
 # =====================
 st.set_page_config(page_title="Smart Triggers AI", layout="wide")
-st.title("Smart Triggers AI — Анализ комментариев и текста")
+st.title("Smart Triggers AI — анализ текстов")
 
-uploaded = st.file_uploader("Загрузите файл (txt / csv)", type=["txt", "csv"])
-
+uploaded = st.file_uploader("Загрузите файл (txt/csv)", type=["txt", "csv"])
 if uploaded:
     try:
         df_input = read_uploaded_file(uploaded)
         df_result = analyze(df_input["text"].tolist())
 
         st.dataframe(df_result)
-
         st.download_button(
             "Скачать результат CSV",
             df_result.to_csv(index=False, encoding="utf-8-sig"),
             "smart_triggers_result.csv",
             "text/csv"
         )
-
     except Exception as e:
-        st.error(f"Ошибка обработки файла: {str(e)}")
+        st.error(f"Ошибка: {e}")
