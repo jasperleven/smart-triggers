@@ -8,17 +8,20 @@ import requests
 # =====================
 HF_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
 HF_TOKEN = os.getenv("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")
-HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
+
+HEADERS = {
+    "Authorization": f"Bearer {HF_TOKEN}"
+}
 
 # =====================
-# 10 УТВЕРЖДЁННЫХ ТРИГГЕРОВ
+# ТРИГГЕРЫ (10 ШТУК)
 # =====================
 TRIGGERS = {
-    "negative": ["ненавижу", "ужас", "достало", "бесит", "кошмар"],
+    "negative": ["ненавижу", "достало", "бесит", "ужас", "кошмар"],
     "complaint": ["проблема", "не работает", "сломалось", "парковка", "очередь"],
     "spam": ["подпишись", "заработай", "крипта", "казино", "ставки"],
     "praise": ["отлично", "супер", "круто", "нравится"],
-    "service": ["поддержка", "сервис", "обслуживание", "доставка"],
+    "service": ["обслуживание", "поддержка", "сервис", "доставка"],
     "feature": ["функция", "опция", "интерфейс", "возможность"],
     "warning": ["ошибка", "сбой", "авария"],
     "info": ["информация", "новости", "обновление"],
@@ -44,7 +47,7 @@ def local_trigger(text: str):
 # =====================
 def ai_trigger(text: str):
     prompt = (
-        "Выбери ОДИН триггер из списка:\n"
+        "Определи ОДИН триггер строго из списка:\n"
         f"{', '.join(ALLOWED_TRIGGERS)}\n\n"
         f"Текст: {text}\n\n"
         "Ответь ТОЛЬКО названием триггера."
@@ -58,11 +61,12 @@ def ai_trigger(text: str):
             timeout=15
         )
         r.raise_for_status()
-        result = r.json()[0]["generated_text"].strip().lower()
 
-        for trig in ALLOWED_TRIGGERS:
-            if trig in result:
-                return trig, 70
+        result = r.json()[0]["generated_text"].lower().strip()
+
+        for t in ALLOWED_TRIGGERS:
+            if t in result:
+                return t, 70
 
     except Exception:
         pass
@@ -74,18 +78,18 @@ def ai_trigger(text: str):
 # =====================
 def analyze_texts(texts):
     rows = []
+
     for i, text in enumerate(texts, start=1):
+        trigger, confidence = local_trigger(text)
 
-        trig, conf = local_trigger(text)
-
-        if trig is None:
-            trig, conf = ai_trigger(text)
+        if trigger is None:
+            trigger, confidence = ai_trigger(text)
 
         rows.append({
             "id": i,
             "text": text,
-            "final_trigger": trig,
-            "confidence_%": conf
+            "final_trigger": trigger,
+            "confidence_%": confidence
         })
 
     return pd.DataFrame(rows)
@@ -95,7 +99,7 @@ def analyze_texts(texts):
 # =====================
 st.set_page_config(page_title="Smart Triggers AI", layout="centered")
 st.title("Smart Triggers AI")
-st.write("Анализ текстов по триггерам с использованием AI")
+st.write("AI-классификация текстов по триггерам")
 
 # ---- Ручной ввод
 user_text = st.text_area("Введите текст")
@@ -104,6 +108,7 @@ if st.button("Анализировать текст"):
     if user_text.strip():
         df = analyze_texts([user_text])
         st.dataframe(df)
+
         st.download_button(
             "Скачать CSV",
             df.to_csv(index=False, encoding="utf-8-sig"),
@@ -111,21 +116,34 @@ if st.button("Анализировать текст"):
             "text/csv"
         )
 
-# ---- CSV загрузка
+# ---- Загрузка CSV
 uploaded_file = st.file_uploader("Или загрузите CSV (колонка text)", type="csv")
 
 if uploaded_file:
     try:
         try:
-            df_input = pd.read_csv(uploaded_file, encoding="utf-8")
+            df_input = pd.read_csv(
+                uploaded_file,
+                encoding="utf-8-sig",
+                sep=None,
+                engine="python"
+            )
         except UnicodeDecodeError:
-            df_input = pd.read_csv(uploaded_file, encoding="cp1251")
+            df_input = pd.read_csv(
+                uploaded_file,
+                encoding="cp1251",
+                sep=None,
+                engine="python"
+            )
+
+        df_input.columns = [c.strip().lower() for c in df_input.columns]
 
         if "text" not in df_input.columns:
             st.error("CSV должен содержать колонку 'text'")
         else:
             df_result = analyze_texts(df_input["text"].astype(str).tolist())
             st.dataframe(df_result)
+
             st.download_button(
                 "Скачать результат CSV",
                 df_result.to_csv(index=False, encoding="utf-8-sig"),
