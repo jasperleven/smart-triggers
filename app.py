@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-HF_TOKEN = os.getenv("HF_TOKEN")
+HF_TOKEN = os.getenv("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")
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
 # =====================
