@@ -12,7 +12,7 @@ HF_TOKEN = os.getenv("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")  # вставля�
 
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
 
-# Кандидаты для AI (other убран из AI-классификации)
+# Кандидаты для AI (без "other")
 TRIGGERS = [
     "negative",
     "complaint",
@@ -36,14 +36,13 @@ KEYWORDS = {
 }
 
 # =====================
-# ЧТЕНИЕ ФАЙЛА (без порчи кодировки)
+# ЧТЕНИЕ ФАЙЛА
 # =====================
 def read_uploaded_file(uploaded_file):
     raw = uploaded_file.read()
     encoding = chardet.detect(raw)["encoding"]
     text = raw.decode(encoding)
 
-    # строим DataFrame
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     if lines[0].lower() == "text":
         lines = lines[1:]
@@ -61,10 +60,9 @@ def ai_classify(text):
     label = res["labels"][0]
     score = int(res["scores"][0] * 100)
 
-    # fallback для low-confidence
+    # fallback для low-confidence → neutral
     if score < 55:
-        label = "other"
-        score = max(score, 40)
+        label = "neutral"
 
     return label, score
 
@@ -90,7 +88,7 @@ def analyze(texts):
             label, conf = ai_classify(text)
             conf = keyword_boost(text, label, conf)
         except Exception:
-            label, conf = "other", 40
+            label, conf = "neutral", 40
         rows.append({
             "id": i,
             "text": text,
