@@ -1,100 +1,137 @@
-# app.py
+import os
 import streamlit as st
 import pandas as pd
 import requests
 
 # =====================
-# 10 утверждённых триггеров
+# НАСТРОЙКИ
 # =====================
-TRIGGERS = {
-    "negative": ["надоел", "ужас", "плохо", "ненавижу", "достало", "бесит", "отвратительно", "кошмар"],
-    "complaint": ["парковка", "дорога", "проблема", "не работает", "сломалось", "очередь"],
-    "spam": ["подпишись", "заработок", "доход", "крипта", "казино", "ставки"],
-    "praise": ["отлично", "супер", "круто", "хорошо", "нравится"],
-    "service": ["поддержка", "сервис", "обслуживание", "доставка"],
-    "feature": ["функция", "опция", "возможность", "интерфейс"],
-    "warning": ["ошибка", "сбой", "проблема", "не работает"],
-    "info": ["информация", "новости", "обновление", "уведомление"],
-    "suggestion": ["предложение", "идея", "совет", "рекомендация"],
-    "other": ["прочее", "другое", "разное"]
-}
-
-HF_API_URL = "https://api-inference.huggingface.co/models/<ваша_модель>"
-HF_TOKEN = "<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>"
+HF_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
+HF_TOKEN = os.getenv("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")
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
 
 # =====================
-# Функции анализа
+# 10 УТВЕРЖДЁННЫХ ТРИГГЕРОВ
 # =====================
-def analyze_local(text):
-    """Локальная проверка текста по триггерам"""
-    found = []
-    for trig, words in TRIGGERS.items():
-        if any(word in text.lower() for word in words):
-            found.append(trig)
-    if found:
-        return found[0], ", ".join(found), 100
-    return None, None, None
+TRIGGERS = {
+    "negative": ["ненавижу", "ужас", "достало", "бесит", "кошмар"],
+    "complaint": ["проблема", "не работает", "сломалось", "парковка", "очередь"],
+    "spam": ["подпишись", "заработай", "крипта", "казино", "ставки"],
+    "praise": ["отлично", "супер", "круто", "нравится"],
+    "service": ["поддержка", "сервис", "обслуживание", "доставка"],
+    "feature": ["функция", "опция", "интерфейс", "возможность"],
+    "warning": ["ошибка", "сбой", "авария"],
+    "info": ["информация", "новости", "обновление"],
+    "suggestion": ["предложение", "идея", "совет", "рекомендую"],
+    "other": []
+}
 
-def analyze_hf(text):
-    """Обработка через Hugging Face"""
+ALLOWED_TRIGGERS = list(TRIGGERS.keys())
+
+# =====================
+# ЛОКАЛЬНЫЙ АНАЛИЗ
+# =====================
+def local_trigger(text: str):
+    text = text.lower()
+    for trigger, words in TRIGGERS.items():
+        for w in words:
+            if w in text:
+                return trigger, 90
+    return None, None
+
+# =====================
+# AI АНАЛИЗ (HF)
+# =====================
+def ai_trigger(text: str):
     prompt = (
-        "Определи, какой из триггеров подходит к тексту: "
-        "negative, complaint, spam, praise, service, feature, warning, info, suggestion, other.\n"
-        f"Текст: {text}"
+        "Выбери ОДИН триггер из списка:\n"
+        f"{', '.join(ALLOWED_TRIGGERS)}\n\n"
+        f"Текст: {text}\n\n"
+        "Ответь ТОЛЬКО названием триггера."
     )
+
     try:
-        response = requests.post(HF_API_URL, headers=HEADERS, json={"inputs": prompt})
-        response.raise_for_status()
-        result_text = response.json()[0]["generated_text"].strip().lower()
-        for trig in TRIGGERS.keys():
-            if trig in result_text:
-                return trig, trig, 100
-    except:
+        r = requests.post(
+            HF_API_URL,
+            headers=HEADERS,
+            json={"inputs": prompt},
+            timeout=15
+        )
+        r.raise_for_status()
+        result = r.json()[0]["generated_text"].strip().lower()
+
+        for trig in ALLOWED_TRIGGERS:
+            if trig in result:
+                return trig, 70
+
+    except Exception:
         pass
-    return "other", "other", 50
 
-def analyze_text(text):
-    """Полная обработка текста"""
-    final, triggers, confidence = analyze_local(text)
-    if final is not None:
-        return {"text": text, "triggers": triggers, "confidence_%": confidence, "final_trigger": final}
-    else:
-        final_hf, triggers_hf, conf_hf = analyze_hf(text)
-        return {"text": text, "triggers": triggers_hf, "confidence_%": conf_hf, "final_trigger": final_hf}
-
-def process_texts(texts):
-    return pd.DataFrame([analyze_text(t) for t in texts])
+    return "other", 40
 
 # =====================
-# Streamlit интерфейс
+# ОСНОВНАЯ ЛОГИКА
 # =====================
+def analyze_texts(texts):
+    rows = []
+    for i, text in enumerate(texts, start=1):
+
+        trig, conf = local_trigger(text)
+
+        if trig is None:
+            trig, conf = ai_trigger(text)
+
+        rows.append({
+            "id": i,
+            "text": text,
+            "final_trigger": trig,
+            "confidence_%": conf
+        })
+
+    return pd.DataFrame(rows)
+
+# =====================
+# STREAMLIT UI
+# =====================
+st.set_page_config(page_title="Smart Triggers AI", layout="centered")
 st.title("Smart Triggers AI")
-st.write("Загрузите CSV или введите текст для анализа триггеров.")
+st.write("Анализ текстов по триггерам с использованием AI")
 
-# Ввод текста вручную
-user_input = st.text_area("Введите текст для анализа:")
+# ---- Ручной ввод
+user_text = st.text_area("Введите текст")
 
 if st.button("Анализировать текст"):
-    if user_input.strip() != "":
-        df_result = process_texts([user_input])
-        st.dataframe(df_result)
-        csv = df_result.to_csv(index=False, encoding="utf-8-sig")
-        st.download_button("Скачать CSV", csv, "smart_triggers_result.csv", "text/csv")
-    else:
-        st.warning("Введите текст!")
+    if user_text.strip():
+        df = analyze_texts([user_text])
+        st.dataframe(df)
+        st.download_button(
+            "Скачать CSV",
+            df.to_csv(index=False, encoding="utf-8-sig"),
+            "result.csv",
+            "text/csv"
+        )
 
-# Загрузка CSV
-uploaded_file = st.file_uploader("Или загрузите CSV (колонка 'text')", type=["csv"])
-if uploaded_file is not None:
+# ---- CSV загрузка
+uploaded_file = st.file_uploader("Или загрузите CSV (колонка text)", type="csv")
+
+if uploaded_file:
     try:
-        df_uploaded = pd.read_csv(uploaded_file)
-        if "text" not in df_uploaded.columns:
+        try:
+            df_input = pd.read_csv(uploaded_file, encoding="utf-8")
+        except UnicodeDecodeError:
+            df_input = pd.read_csv(uploaded_file, encoding="cp1251")
+
+        if "text" not in df_input.columns:
             st.error("CSV должен содержать колонку 'text'")
         else:
-            df_result = process_texts(df_uploaded["text"].tolist())
+            df_result = analyze_texts(df_input["text"].astype(str).tolist())
             st.dataframe(df_result)
-            csv = df_result.to_csv(index=False, encoding="utf-8-sig")
-            st.download_button("Скачать CSV", csv, "smart_triggers_result.csv", "text/csv")
+            st.download_button(
+                "Скачать результат CSV",
+                df_result.to_csv(index=False, encoding="utf-8-sig"),
+                "smart_triggers_result.csv",
+                "text/csv"
+            )
+
     except Exception as e:
-        st.error(f"Ошибка при обработке файла: {e}")
+        st.error(f"Ошибка обработки файла: {e}")
