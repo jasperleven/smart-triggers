@@ -5,66 +5,69 @@ import requests
 import chardet
 
 # =====================
-# НАСТРОЙКИ
+# CONFIG
 # =====================
+st.set_page_config(
+    page_title="Smart Triggers",
+    layout="wide"
+)
+
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-HF_TOKEN = os.getenv("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")
+HF_TOKEN = os.getenv("HF_TOKEN")
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
 # =====================
-# 10 триггеров с ключевыми словами
+# TRIGGERS
 # =====================
 TRIGGERS_KEYWORDS = {
     "negative": ["ненавижу", "достало", "бесит", "ужас"],
-    "complaint": ["проблема", "не работает", "сломалось", "парковка", "очередь"],
+    "complaint": ["проблема", "не работает", "сломалось", "очередь"],
     "spam": ["подпишись", "заработай", "крипта", "ставки", "казино"],
     "praise": ["отлично", "супер", "круто", "хорошо"],
     "service": ["обслуживание", "поддержка", "сервис", "доставка"],
-    "feature": ["функция", "опция", "интерфейс", "возможность"],
-    "warning": ["ошибка", "сбой", "неудача"],
+    "feature": ["функция", "опция", "интерфейс"],
+    "warning": ["ошибка", "сбой"],
     "info": ["информация", "новости", "обновление"],
-    "suggestion": ["предложение", "идея", "совет", "рекомендую"]
+    "suggestion": ["предложение", "идея", "совет"]
 }
 ALLOWED_TRIGGERS = list(TRIGGERS_KEYWORDS.keys())
 
 # =====================
-# ЧТЕНИЕ ФАЙЛА
+# FILE READER
 # =====================
 def read_uploaded_file(uploaded_file):
     raw = uploaded_file.read()
     encoding = chardet.detect(raw)["encoding"] or "utf-8"
     text = raw.decode(encoding, errors="ignore")
     lines = [l.strip() for l in text.splitlines() if l.strip()]
-    # Заголовок необязателен
     if lines and lines[0].lower() == "text":
         lines = lines[1:]
     return pd.DataFrame({"text": lines})
 
 # =====================
-# ЛОКАЛЬНАЯ КЛАССИФИКАЦИЯ (keyword priority)
+# CLASSIFIERS
 # =====================
-def classify_local(text: str):
+def classify_local(text):
     tl = text.lower()
     for trig, words in TRIGGERS_KEYWORDS.items():
-        for w in words:
-            if w in tl:
-                return trig, 90
+        if any(w in tl for w in words):
+            return trig, 90
     return None, None
 
-# =====================
-# AI ФУНКЦИЯ (fallback)
-# =====================
-def classify_ai(text: str):
+def classify_ai(text):
     if not HF_TOKEN:
         return "neutral", 40
+
     prompt = (
-        "К какому из триггеров относится текст: "
-        f"{', '.join(ALLOWED_TRIGGERS)}?\n"
+        f"К какому из триггеров относится текст: {', '.join(ALLOWED_TRIGGERS)}?\n"
         f"Текст: {text}"
     )
     try:
         r = requests.post(
-            HF_API_URL, headers=HEADERS, json={"inputs": prompt}, timeout=15
+            HF_API_URL,
+            headers=HEADERS,
+            json={"inputs": prompt},
+            timeout=15
         )
         r.raise_for_status()
         result = r.json()
@@ -74,56 +77,102 @@ def classify_ai(text: str):
             return label, score
     except Exception:
         pass
+
     return "neutral", 40
 
-# =====================
-# ОСНОВНАЯ
-# =====================
 def analyze(texts):
     rows = []
-    for i, text in enumerate(texts, start=1):
+    for i, text in enumerate(texts, 1):
         label, conf = classify_local(text)
         if not label:
             label, conf = classify_ai(text)
+
         rows.append({
             "id": i,
             "text": text,
-            "final_trigger": label,
+            "trigger": label,
             "confidence_%": conf
         })
     return pd.DataFrame(rows)
 
 # =====================
-# STREAMLIT UI
+# HEADER
 # =====================
-st.set_page_config(page_title="Smart Triggers AI", layout="wide")
-st.title("Smart Triggers AI — анализ текстов")
+col1, col2 = st.columns([4, 1])
+with col1:
+    st.markdown("## Smart Triggers")
+with col2:
+    st.markdown("[Telegram](https://t.me/your_channel)")
 
-# Поле для ручного ввода текста
-manual_text = st.text_area("Или введите текст вручную для анализа:")
+st.divider()
 
-uploaded = st.file_uploader("Загрузите файл (txt/csv)", type=["txt", "csv"])
-texts_to_analyze = []
+# =====================
+# HERO
+# =====================
+st.markdown("### Автоматический анализ текстов, комментариев и отзывов")
+st.markdown(
+    "Находите позитив, негатив и ключевые триггеры. "
+    "Оценивайте уверенность анализа с помощью confidence_%."
+)
+
+# =====================
+# INPUT
+# =====================
+st.markdown("#### Введите текст для анализа")
+
+col_input, col_button = st.columns([5, 1])
+with col_input:
+    manual_text = st.text_area("", placeholder="Введите текст…", height=100)
+with col_button:
+    analyze_click = st.button("Начать анализ", use_container_width=True)
+
+uploaded = st.file_uploader(
+    "Или загрузите CSV / TXT файл",
+    type=["csv", "txt"]
+)
+
+# =====================
+# PROCESSING
+# =====================
+texts = []
 
 if manual_text.strip():
-    texts_to_analyze.append(manual_text.strip())
+    texts.append(manual_text.strip())
 
 if uploaded:
     try:
-        df_input = read_uploaded_file(uploaded)
-        texts_to_analyze.extend(df_input["text"].tolist())
+        df_uploaded = read_uploaded_file(uploaded)
+        texts.extend(df_uploaded["text"].tolist())
     except Exception as e:
-        st.error(f"Ошибка обработки файла: {e}")
+        st.error(f"Ошибка файла: {e}")
 
-if texts_to_analyze:
-    df_result = analyze(texts_to_analyze)
-    st.dataframe(df_result)
+if analyze_click and texts:
+    st.divider()
+    st.markdown("### Результаты анализа")
 
-    # --- Скачивание CSV с нормальной кодировкой для Excel ---
-    csv_bytes = df_result.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
+    df_result = analyze(texts)
+    st.dataframe(df_result, use_container_width=True)
+
+    csv_bytes = df_result.to_csv(
+        index=False,
+        sep=";",
+        encoding="utf-8-sig"
+    ).encode("utf-8-sig")
+
     st.download_button(
-        "Скачать результат CSV",
+        "Скачать CSV",
         csv_bytes,
         "smart_triggers_result.csv",
         "text/csv"
     )
+
+# =====================
+# FOOTER
+# =====================
+st.divider()
+st.markdown(
+    "📩 **Контакты:**  \n"
+    "Telegram: https://t.me/your_channel  \n"
+    "Email: hello@smarttriggers.ai  \n\n"
+    "© Smart Triggers"
+)
