@@ -1,128 +1,93 @@
 import streamlit as st
 import pandas as pd
-import re
+import json
 
-# =========================
-# НАСТРОЙКИ
-# =========================
+# --- 1. Список триггеров ---
+TRIGGERS = [
+    "negative",
+    "complaint",
+    "spam",
+    "positive",
+    "suggestion",
+    "question",
+    "news_info",
+    "discussion",
+    "irony_sarcasm",
+    "neutral"
+]
 
-st.set_page_config(
-    page_title="Smart Triggers",
-    page_icon="⚡",
-    layout="centered"
-)
+# --- 2. Prompt для AI ---
+PROMPT_TEMPLATE = """
+You are a text classification AI.
 
-# =========================
-# ТРИГЕРЫ
-# =========================
+Classify the Russian text into ONE main trigger from the list:
 
-TRIGGERS = {
-    "negative": [
-        "надоел", "ужас", "плохо", "ненавижу", "достало",
-        "бесит", "отвратительно", "кошмар"
-    ],
-    "complaint": [
-        "парковка", "дорога", "проблема", "не работает",
-        "сломалось", "очередь"
-    ],
-    "spam": [
-        "подпишись", "заработок", "доход",
-        "крипта", "казино", "ставки"
-    ],
-    "political": [
-        "мэр", "власть", "правительство",
-        "выборы", "чиновники"
-    ]
-}
+negative
+complaint
+spam
+positive
+suggestion
+question
+news_info
+discussion
+irony_sarcasm
+neutral
 
-# =========================
-# ЛОГИКА
-# =========================
+Return JSON:
+{{
+  "main_trigger": "<trigger>",
+  "confidence": <0-1>
+}}
 
-def detect_triggers(text: str):
-    text = text.lower()
-    found = []
+Text:
+"{text}"
+"""
 
-    for trigger, keywords in TRIGGERS.items():
-        for word in keywords:
-            if re.search(rf"\b{word}\b", text):
-                found.append(trigger)
-                break
+# --- 3. Заглушка AI функции (для MVP, потом подключим реальный LLM API) ---
+def ai_classify(text):
+    # Здесь мы имитируем работу AI на MVP
+    # В реальном продукте подключаем OpenAI, GPT4All, SVM8M и т.д.
+    text_lower = text.lower()
+    if any(w in text_lower for w in ["надоел", "ужас", "плохо", "ненавижу", "достало", "бесит", "отвратительно", "кошмар"]):
+        return "negative", 0.9
+    elif any(w in text_lower for w in ["парковка", "дорога", "проблема", "не работает", "сломалось", "очередь"]):
+        return "complaint", 0.9
+    elif any(w in text_lower for w in ["подпишись", "заработок", "доход", "крипта", "казино", "ставки"]):
+        return "spam", 0.9
+    else:
+        return "neutral", 0.6
 
-    if not found:
-        found.append("neutral")
+# --- 4. Streamlit UI ---
+st.title("Smart Triggers — AI классификация текста")
+st.write("Загрузка текста или CSV для определения триггеров")
 
-    confidence = round(100 / len(found), 2)
+uploaded_file = st.file_uploader("Выберите CSV файл с колонкой 'text'", type=["csv"])
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    if "text" not in df.columns:
+        st.error("CSV должен содержать колонку 'text'")
+    else:
+        results = []
+        for idx, row in df.iterrows():
+            text = row["text"]
+            main_trigger, confidence = ai_classify(text)
+            results.append({
+                "id": idx + 1,
+                "text": text,
+                "main_trigger": main_trigger,
+                "confidence": round(confidence * 100, 2)
+            })
+        df_result = pd.DataFrame(results)
+        st.write(df_result)
 
-    return found, confidence
+        # Сохраняем CSV с utf-8-sig чтобы русские символы были корректно
+        csv = df_result.to_csv(index=False, encoding="utf-8-sig")
+        st.download_button(
+            label="Скачать результат",
+            data=csv,
+            file_name="smart_triggers_result.csv",
+            mime="text/csv"
+        )
 
-
-def analyze_texts(texts):
-    rows = []
-
-    for idx, text in enumerate(texts, start=1):
-        triggers, confidence = detect_triggers(text)
-
-        rows.append({
-            "id": idx,
-            "text": text,
-            "triggers": ", ".join(triggers),
-            "confidence_%": confidence,
-            "final_trigger": triggers[0]
-        })
-
-    return pd.DataFrame(rows)
-
-
-# =========================
-# ИНТЕРФЕЙС
-# =========================
-
-st.title("⚡ Smart Triggers")
-st.write("Анализ текста и автоматическое определение триггеров")
-
-input_method = st.radio(
-    "Формат ввода данных",
-    ["Вставить текст", "Загрузить CSV"]
-)
-
-texts = []
-
-if input_method == "Вставить текст":
-    raw_text = st.text_area(
-        "Каждая строка — отдельный текст",
-        height=200,
-        placeholder="надоела эта парковка"
-    )
-
-    if raw_text:
-        texts = [line.strip() for line in raw_text.split("\n") if line.strip()]
-
-else:
-    uploaded_file = st.file_uploader("Загрузите CSV с колонкой `text`", type=["csv"])
-
-    if uploaded_file:
-        df = pd.read_csv(uploaded_file)
-        texts = df["text"].dropna().tolist()
-
-# =========================
-# РЕЗУЛЬТАТ
-# =========================
-
-if texts:
-    result = analyze_texts(texts)
-
-    st.subheader("Результат")
-    st.dataframe(result, use_container_width=True)
-
-    csv_bytes = result.to_csv(
-        index=False,
-        encoding="utf-8-sig"
-    ).encode("utf-8-sig")
-
-    st.download_button(
-        label="📥 Скачать CSV",
-        data=csv_bytes,
-        file_name="smart_triggers_result.csv",
-        mime="text/csv; charset=utf-8"
-    )
+st.write("Пример текста:")
+st.write("`надоела эта парковка` → main_trigger: complaint, confidence: 90%")
