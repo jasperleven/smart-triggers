@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 
 # =====================
-# Список 10 утверждённых триггеров
+# 10 утверждённых триггеров
 # =====================
 TRIGGERS = {
     "negative": ["надоел", "ужас", "плохо", "ненавижу", "достало", "бесит", "отвратительно", "кошмар"],
@@ -21,47 +21,47 @@ TRIGGERS = {
 
 HF_API_URL = "https://api-inference.huggingface.co/models/<ваша_модель>"
 HF_TOKEN = "<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>"
-
 HEADERS = {"Authorization": f"Bearer {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}"}
 
 # =====================
-# Функции
+# Функции анализа
 # =====================
 def analyze_local(text):
-    """Проверка текста по локальным триггерам"""
+    """Локальная проверка текста по триггерам"""
     found = []
     for trig, words in TRIGGERS.items():
         if any(word in text.lower() for word in words):
             found.append(trig)
     if found:
-        return found[0], ", ".join(found), 100  # final_trigger, triggers, confidence
-    else:
-        return None, None, None
+        return found[0], ", ".join(found), 100
+    return None, None, None
 
 def analyze_hf(text):
-    """Отправка текста на Hugging Face и сопоставление с 10 триггерами"""
+    """Обработка через Hugging Face"""
     prompt = (
         "Определи, какой из триггеров подходит к тексту: "
         "negative, complaint, spam, praise, service, feature, warning, info, suggestion, other.\n"
         f"Текст: {text}"
     )
-    response = requests.post(HF_API_URL, headers=HEADERS, json={"inputs": prompt})
-    if response.status_code == 200:
+    try:
+        response = requests.post(HF_API_URL, headers=HEADERS, json={"inputs": prompt})
+        response.raise_for_status()
         result_text = response.json()[0]["generated_text"].strip().lower()
-        # Сопоставляем с утверждёнными триггерами
         for trig in TRIGGERS.keys():
             if trig in result_text:
                 return trig, trig, 100
-    # Если AI не смог определить
+    except:
+        pass
     return "other", "other", 50
 
 def analyze_text(text):
-    """Полная обработка: локальные триггеры -> AI Hugging Face"""
+    """Полная обработка текста"""
     final, triggers, confidence = analyze_local(text)
     if final is not None:
         return {"text": text, "triggers": triggers, "confidence_%": confidence, "final_trigger": final}
     else:
-        return {"text": text, "triggers": triggers, "confidence_%": confidence, "final_trigger": analyze_hf(text)[0]}
+        final_hf, triggers_hf, conf_hf = analyze_hf(text)
+        return {"text": text, "triggers": triggers_hf, "confidence_%": conf_hf, "final_trigger": final_hf}
 
 def process_texts(texts):
     return pd.DataFrame([analyze_text(t) for t in texts])
@@ -80,14 +80,9 @@ if st.button("Анализировать текст"):
         df_result = process_texts([user_input])
         st.dataframe(df_result)
         csv = df_result.to_csv(index=False, encoding="utf-8-sig")
-        st.download_button(
-            label="Скачать результат CSV",
-            data=csv,
-            file_name="smart_triggers_result.csv",
-            mime="text/csv"
-        )
+        st.download_button("Скачать CSV", csv, "smart_triggers_result.csv", "text/csv")
     else:
-        st.warning("Введите текст для анализа!")
+        st.warning("Введите текст!")
 
 # Загрузка CSV
 uploaded_file = st.file_uploader("Или загрузите CSV (колонка 'text')", type=["csv"])
@@ -95,6 +90,11 @@ if uploaded_file is not None:
     try:
         df_uploaded = pd.read_csv(uploaded_file)
         if "text" not in df_uploaded.columns:
-            st.error("CSV должен содержать колонку с названием 'text'")
+            st.error("CSV должен содержать колонку 'text'")
         else:
-            df_r_
+            df_result = process_texts(df_uploaded["text"].tolist())
+            st.dataframe(df_result)
+            csv = df_result.to_csv(index=False, encoding="utf-8-sig")
+            st.download_button("Скачать CSV", csv, "smart_triggers_result.csv", "text/csv")
+    except Exception as e:
+        st.error(f"Ошибка при обработке файла: {e}")
