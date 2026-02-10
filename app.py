@@ -35,6 +35,7 @@ def read_uploaded_file(uploaded_file):
     encoding = chardet.detect(raw)["encoding"] or "utf-8"
     text = raw.decode(encoding, errors="ignore")
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+    # Заголовок необязателен
     if lines and lines[0].lower() == "text":
         lines = lines[1:]
     return pd.DataFrame({"text": lines})
@@ -98,20 +99,31 @@ def analyze(texts):
 st.set_page_config(page_title="Smart Triggers AI", layout="wide")
 st.title("Smart Triggers AI — анализ текстов")
 
+# Поле для ручного ввода текста
+manual_text = st.text_area("Или введите текст вручную для анализа:")
+
 uploaded = st.file_uploader("Загрузите файл (txt/csv)", type=["txt", "csv"])
+texts_to_analyze = []
+
+if manual_text.strip():
+    texts_to_analyze.append(manual_text.strip())
+
 if uploaded:
     try:
         df_input = read_uploaded_file(uploaded)
-        df_result = analyze(df_input["text"].tolist())
-        st.dataframe(df_result)
-
-        # --- Скачивание CSV с нормальной кодировкой для Excel ---
-        csv_bytes = df_result.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
-        st.download_button(
-            "Скачать результат CSV",
-            csv_bytes,
-            "smart_triggers_result.csv",
-            "text/csv"
-        )
+        texts_to_analyze.extend(df_input["text"].tolist())
     except Exception as e:
         st.error(f"Ошибка обработки файла: {e}")
+
+if texts_to_analyze:
+    df_result = analyze(texts_to_analyze)
+    st.dataframe(df_result)
+
+    # --- Скачивание CSV с нормальной кодировкой для Excel ---
+    csv_bytes = df_result.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
+    st.download_button(
+        "Скачать результат CSV",
+        csv_bytes,
+        "smart_triggers_result.csv",
+        "text/csv"
+    )
