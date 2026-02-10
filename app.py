@@ -1,106 +1,96 @@
+# app.py
 import streamlit as st
 import pandas as pd
-import os
-from gpt4all import GPT4All
+import requests
 
-# -----------------------------
-# 1. Настройки триггеров
-# -----------------------------
-TRIGGERS = [
-    "negative",
-    "complaint",
-    "spam",
-    "positive",
-    "suggestion",
-    "question",
-    "news_info",
-    "discussion",
-    "irony_sarcasm"
-]
+# =====================
+# Настройки Hugging Face
+# =====================
+API_TOKEN = "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"
+API_URL = "https://api-inference.huggingface.co/models/cointegrated/rubert-tiny2"  # лёгкая русскоязычная модель
+HEADERS = {"Authorization": f"Bearer {API_TOKEN}"}
 
-# -----------------------------
-# 2. Инициализация GPT4All
-# -----------------------------
-MODEL_PATH = "ggml-gpt4all-j-v1.3-groovy.bin"
+# =====================
+# Триггеры
+# =====================
+TRIGGERS = {
+    "negative": ["надоел", "ужас", "плохо", "ненавижу", "достало", "бесит", "отвратительно", "кошмар"],
+    "complaint": ["парковка", "дорога", "проблема", "не работает", "сломалось", "очередь"],
+    "spam": ["подпишись", "заработок", "доход", "крипта", "казино", "ставки"]
+}
 
-# Скачивание модели при первом запуске (если файла нет)
-if not os.path.exists(MODEL_PATH):
-    st.info("Скачиваем модель GPT4All...")
-    # Пример: можно дать ссылку на официальный источник
-    # os.system(f"wget -O {MODEL_PATH} <ссылка-на-модель>")
-    st.warning("Скачайте модель вручную и положите в папку с app.py")
-else:
-    st.success("Модель найдена, инициализация AI...")
-    
-model = GPT4All(MODEL_PATH)
-
-# -----------------------------
-# 3. Функция классификации
-# -----------------------------
-def ai_classify(text: str):
-    prompt = f"""
-    Классифицируй текст на один из триггеров:
-    {', '.join(TRIGGERS)}
-    
-    Текст: "{text}"
-    
-    Верни JSON:
-    {{
-      "main_trigger": "<trigger>",
-      "confidence": <0-1>
-    }}
-    """
-    response = model.generate(prompt)
-    import json
+# =====================
+# Функции
+# =====================
+def classify_text_hf(text):
+    """Классификация через Hugging Face Inference API"""
+    payload = {"inputs": text}
     try:
-        json_line = response.split("\n")[0]
-        result = json.loads(json_line)
-        trigger = result.get("main_trigger", "discussion")
-        confidence = float(result.get("confidence", 0.6))
-        return trigger, confidence
-    except Exception:
-        return "discussion", 0.6
+        response = requests.post(API_URL, headers=HEADERS, json=payload)
+        if response.status_code == 200:
+            return response.json()  # здесь можно добавить обработку ответа модели, если нужно
+        else:
+            return {"error": response.text}
+    except Exception as e:
+        return {"error": str(e)}
 
-# -----------------------------
-# 4. Streamlit UI
-# -----------------------------
-st.title("Smart Triggers — локальный AI")
-st.write("Определение триггеров текста с использованием GPT4All")
+def analyze_triggers(text):
+    """Поиск ключевых триггеров в тексте"""
+    found = []
+    for trig, words in TRIGGERS.items():
+        if any(word in text.lower() for word in words):
+            found.append(trig)
+    confidence = 100 if found else 0
+    return {"text": text, "triggers": found if found else ["none"], "confidence": confidence}
 
-# Загрузка CSV
-uploaded_file = st.file_uploader("Загрузите CSV с колонкой 'text'", type=["csv"])
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-    if "text" not in df.columns:
-        st.error("CSV должен содержать колонку 'text'")
-    else:
-        results = []
-        for idx, row in df.iterrows():
-            text = row["text"]
-            main_trigger, confidence = ai_classify(text)
-            results.append({
-                "id": idx + 1,
-                "text": text,
-                "main_trigger": main_trigger,
-                "confidence": round(confidence * 100, 2)
-            })
-        df_result = pd.DataFrame(results)
-        st.write(df_result)
+def process_texts(texts):
+    results = []
+    for text in texts:
+        # Можно раскомментировать, если хочешь использовать модель HF для анализа:
+        # model_result = classify_text_hf(text)
+        trigger_result = analyze_triggers(text)
+        results.append(trigger_result)
+    return pd.DataFrame(results)
 
+# =====================
+# Streamlit интерфейс
+# =====================
+st.title("Smart Triggers AI")
+st.write("Загрузите CSV или введите текст для анализа триггеров.")
+
+# --- Ввод текста вручную ---
+user_input = st.text_area("Введите текст для анализа:")
+
+if st.button("Анализировать текст"):
+    if user_input.strip() != "":
+        df_result = process_texts([user_input])
+        st.dataframe(df_result)
         csv = df_result.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
-            label="Скачать результат",
+            label="Скачать результат CSV",
             data=csv,
             file_name="smart_triggers_result.csv",
             mime="text/csv"
         )
-
-# Поле для ввода текста напрямую
-st.write("Или попробуйте ввести текст вручную:")
-user_text = st.text_area("Введите текст")
-if st.button("Классифицировать"):
-    if user_text:
-        trigger, confidence = ai_classify(user_text)
-        st.write(f"**Триггер:** {trigger} | **Confidence:** {round(confidence*100,2)}%")
     else:
-        st.warning("Введите текст для классификации")
+        st.warning("Введите текст для анализа!")
+
+# --- Загрузка CSV ---
+uploaded_file = st.file_uploader("Или загрузите CSV (одна колонка с текстом)", type=["csv"])
+if uploaded_file is not None:
+    try:
+        df_uploaded = pd.read_csv(uploaded_file)
+        if "text" not in df_uploaded.columns:
+            st.error("CSV должен содержать колонку с названием 'text'")
+        else:
+            df_result = process_texts(df_uploaded["text"].tolist())
+            st.dataframe(df_result)
+            csv = df_result.to_csv(index=False, encoding="utf-8-sig")
+            st.download_button(
+                label="Скачать результат CSV",
+                data=csv,
+                file_name="smart_triggers_result.csv",
+                mime="text/csv"
+            )
+    except Exception as e:
+        st.error(f"Ошибка при обработке файла: {e}")
