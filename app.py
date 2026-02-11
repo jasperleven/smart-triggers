@@ -13,10 +13,29 @@ st.set_page_config(
 )
 
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-
-# ⚠️ если токен прописан напрямую
-HF_TOKEN = "PASTE_YOUR_HF_TOKEN_HERE"
+HF_TOKEN = os.getenv("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")
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+
+# =====================
+# STYLES
+# =====================
+st.markdown("""
+<style>
+.main .block-container {
+    max-width: 900px;
+    padding-top: 2rem;
+}
+
+div[data-testid="column"] {
+    padding-top: 0;
+}
+
+button[kind="primary"] {
+    height: 38px;
+    margin-top: 22px;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # =====================
 # TRIGGERS
@@ -101,19 +120,16 @@ def analyze(texts):
 # =====================
 # HERO
 # =====================
-st.markdown("### Автоматический анализ текстов, комментариев и отзывов")
-st.markdown(
-    "Определение триггеров и уверенности результата (confidence_%) без ручной обработки."
-)
-
-st.divider()
+st.markdown("### Автоматический анализ текстов")
+st.caption("Определение триггеров и уровня уверенности анализа")
 
 # =====================
-# INPUT (TEXT + BUTTON INLINE)
+# INPUT (INLINE)
 # =====================
 st.markdown("#### Введите текст для анализа")
 
-col_text, col_btn = st.columns([6, 2])
+col_text, col_btn = st.columns([8, 2], gap="small")
+
 with col_text:
     manual_text = st.text_input(
         "",
@@ -123,13 +139,17 @@ with col_text:
 with col_btn:
     analyze_click = st.button(
         "Начать анализ",
-        use_container_width=True
+        use_container_width=True,
+        type="primary"
     )
 
 uploaded = st.file_uploader(
-    "Или загрузите CSV / TXT файл",
-    type=["csv", "txt"]
+    "Или загрузите CSV / TXT",
+    type=["csv", "txt"],
+    label_visibility="collapsed"
 )
+
+st.caption("Загрузка файла для массового анализа")
 
 # =====================
 # PROCESSING
