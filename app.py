@@ -13,7 +13,9 @@ st.set_page_config(
 )
 
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-HF_TOKEN = os.getenv("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")
+
+# ⚠️ если токен прописан напрямую
+HF_TOKEN = "PASTE_YOUR_HF_TOKEN_HERE"
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
 # =====================
@@ -62,6 +64,7 @@ def classify_ai(text):
         f"К какому из триггеров относится текст: {', '.join(ALLOWED_TRIGGERS)}?\n"
         f"Текст: {text}"
     )
+
     try:
         r = requests.post(
             HF_API_URL,
@@ -96,35 +99,32 @@ def analyze(texts):
     return pd.DataFrame(rows)
 
 # =====================
-# HEADER
-# =====================
-col1, col2 = st.columns([4, 1])
-with col1:
-    st.markdown("## Smart Triggers")
-with col2:
-    st.markdown("[Telegram](https://t.me/your_channel)")
-
-st.divider()
-
-# =====================
 # HERO
 # =====================
 st.markdown("### Автоматический анализ текстов, комментариев и отзывов")
 st.markdown(
-    "Находите позитив, негатив и ключевые триггеры. "
-    "Оценивайте уверенность анализа с помощью confidence_%."
+    "Определение триггеров и уверенности результата (confidence_%) без ручной обработки."
 )
 
+st.divider()
+
 # =====================
-# INPUT
+# INPUT (TEXT + BUTTON INLINE)
 # =====================
 st.markdown("#### Введите текст для анализа")
 
-col_input, col_button = st.columns([5, 1])
-with col_input:
-    manual_text = st.text_area("", placeholder="Введите текст…", height=100)
-with col_button:
-    analyze_click = st.button("Начать анализ", use_container_width=True)
+col_text, col_btn = st.columns([6, 2])
+with col_text:
+    manual_text = st.text_input(
+        "",
+        placeholder="Введите текст для анализа"
+    )
+
+with col_btn:
+    analyze_click = st.button(
+        "Начать анализ",
+        use_container_width=True
+    )
 
 uploaded = st.file_uploader(
     "Или загрузите CSV / TXT файл",
@@ -165,14 +165,3 @@ if analyze_click and texts:
         "smart_triggers_result.csv",
         "text/csv"
     )
-
-# =====================
-# FOOTER
-# =====================
-st.divider()
-st.markdown(
-    "📩 **Контакты:**  \n"
-    "Telegram: https://t.me/your_channel  \n"
-    "Email: hello@smarttriggers.ai  \n\n"
-    "© Smart Triggers"
-)
