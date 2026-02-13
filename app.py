@@ -1,16 +1,19 @@
 import os
 import streamlit as st
 import pandas as pd
-import chardet
 import requests
+import chardet
 
 # =====================
 # CONFIG
 # =====================
-st.set_page_config(page_title="Smart Triggers", layout="wide")
+st.set_page_config(
+    page_title="Smart Triggers",
+    layout="wide"
+)
 
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-HF_TOKEN = os.getenv("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")  # твой токен HuggingFace
+HF_TOKEN = os.getenv("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")
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
 # =====================
@@ -20,12 +23,10 @@ TRIGGERS_KEYWORDS = {
     "negative": ["ненавижу", "достало", "бесит", "ужас"],
     "complaint": ["проблема", "не работает", "сломалось", "очередь"],
     "praise": ["отлично", "супер", "круто", "хорошо"],
-    "warning": ["ошибка", "сбой"],
     "info": ["информация", "новости", "обновление"],
     "suggestion": ["предложение", "идея", "совет"],
-    "question": ["как", "почему", "что если", "можно ли"]
+    "question": ["как", "почему", "что", "где", "когда"]
 }
-
 ALLOWED_TRIGGERS = list(TRIGGERS_KEYWORDS.keys())
 
 # =====================
@@ -59,15 +60,21 @@ def classify_ai(text):
         f"Текст: {text}"
     )
     try:
-        r = requests.post(HF_API_URL, headers=HEADERS, json={"inputs": prompt}, timeout=15)
+        r = requests.post(
+            HF_API_URL,
+            headers=HEADERS,
+            json={"inputs": prompt},
+            timeout=15
+        )
         r.raise_for_status()
         result = r.json()
-        label = result.get("labels", [None])[0]
-        score = int(result.get("scores", [0])[0] * 100)
+        label = result["labels"][0]
+        score = float(result["scores"][0] * 100)
         if label in ALLOWED_TRIGGERS:
             return label, score
     except Exception:
         pass
+
     return "neutral", 40.0
 
 def analyze(texts):
@@ -76,16 +83,20 @@ def analyze(texts):
         label, conf = classify_local(text)
         if not label:
             label, conf = classify_ai(text)
-        rows.append({"id": i, "text": text, "trigger": label, "confidence_%": conf})
+        rows.append({
+            "id": i,
+            "text": text,
+            "trigger": label,
+            "confidence_%": round(conf, 2)
+        })
     return pd.DataFrame(rows)
 
 # =====================
-# TONE SUMMARY
+# SUMMARY TABLE
 # =====================
 def build_tone_summary(df):
-    tone_map = {"negative": "Negative", "complaint": "Negative",
-                "praise": "Positive", "warning": "Negative",
-                "info": "Neutral", "suggestion": "Neutral", "question": "Neutral"}
+    tone_map = {"negative": "Negative", "praise": "Positive", "info": "Neutral",
+                "complaint": "Negative", "suggestion": "Neutral", "question": "Neutral"}
     df["tone"] = df["trigger"].map(tone_map).fillna("Neutral")
     summary = df.groupby("tone").size().reset_index(name="count")
     total = summary["count"].sum()
@@ -95,27 +106,28 @@ def build_tone_summary(df):
 # =====================
 # HEADER
 # =====================
-st.markdown("### Smart Triggers Analyzer")
+st.markdown("## Smart Triggers Analyzer")
 
 # =====================
-# INPUT BLOCK
+# INPUT AREA
 # =====================
-col_text, col_analyze = st.columns([4, 1])
-with col_text:
-    manual_text = st.text_area("", placeholder="Введите текст…", height=80)
-with col_analyze:
-    analyze_click = st.button("Начать анализ", use_container_width=True)
+col_input, col_button = st.columns([5, 1])
+with col_input:
+    manual_text = st.text_area("", placeholder="Введите текст…", height=100)
+with col_button:
+    analyze_click = st.button(
+        "Начать анализ",
+        use_container_width=True,
+        type="primary"
+    )
 
-col_file, col_upload = st.columns([4, 1])
-with col_file:
-    uploaded = st.file_uploader("", type=["csv", "txt"], label_visibility="collapsed")
-with col_upload:
-    upload_click = st.button("Загрузить файл", use_container_width=True)
+uploaded = st.file_uploader("Загрузить файл (CSV/TXT)", type=["csv", "txt"])
 
 # =====================
-# COLLECT TEXTS
+# PROCESSING
 # =====================
 texts = []
+
 if manual_text.strip() and analyze_click:
     texts.append(manual_text.strip())
 
@@ -123,29 +135,25 @@ if uploaded:
     try:
         df_uploaded = read_uploaded_file(uploaded)
         texts.extend(df_uploaded["text"].tolist())
+        analyze_click = True  # авто-анализ при загрузке
     except Exception as e:
         st.error(f"Ошибка файла: {e}")
 
-# =====================
-# ANALYSIS
-# =====================
-if texts:
-    df_result = analyze(texts)
+if analyze_click and texts:
     st.divider()
     st.markdown("### Результаты анализа")
+
+    df_result = analyze(texts)
     st.dataframe(df_result, use_container_width=True)
 
-    # Summary table
+    # Таблица тонов сбоку
     df_summary = build_tone_summary(df_result)
-    st.markdown("### Тональность в %")
+    st.markdown("### Процентное распределение тонов")
     st.dataframe(df_summary, use_container_width=True)
 
-    # EXPORT
+    # Экспорт CSV и Excel
     csv_bytes = df_result.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
-    excel_bytes = df_result.to_excel(index=False, engine="openpyxl").to_bytes()
+    excel_bytes = df_result.to_excel(index=False).encode("utf-8")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.download_button("Скачать CSV", csv_bytes, "smart_triggers_result.csv", "text/csv")
-    with col2:
-        st.download_button("Скачать Excel", excel_bytes, "smart_triggers_result.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button("Скачать CSV", csv_bytes, "smart_triggers_result.csv", "text/csv")
+    st.download_button("Скачать Excel", excel_bytes, "smart_triggers_result.xlsx", "application/vnd.ms-excel")
