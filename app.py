@@ -1,31 +1,31 @@
 import os
 import streamlit as st
 import pandas as pd
-import requests
 import chardet
+import requests
 
 # =====================
 # CONFIG
 # =====================
-st.set_page_config(
-    page_title="Smart Triggers",
-    layout="wide"
-)
+st.set_page_config(page_title="Smart Triggers", layout="wide")
 
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-HF_TOKEN = os.getenv("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")  # вставь свой токен в переменные окружения
+HF_TOKEN = os.getenv("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")  # твой токен HuggingFace
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
 # =====================
 # TRIGGERS
 # =====================
 TRIGGERS_KEYWORDS = {
-    "negative": ["ненавижу", "достало", "бесит", "ужас", "проблема", "не работает", "сломалось", "очередь"],
+    "negative": ["ненавижу", "достало", "бесит", "ужас"],
+    "complaint": ["проблема", "не работает", "сломалось", "очередь"],
     "praise": ["отлично", "супер", "круто", "хорошо"],
+    "warning": ["ошибка", "сбой"],
     "info": ["информация", "новости", "обновление"],
     "suggestion": ["предложение", "идея", "совет"],
-    "question": ["?", "вопрос", "как", "что", "почему"]
+    "question": ["как", "почему", "что если", "можно ли"]
 }
+
 ALLOWED_TRIGGERS = list(TRIGGERS_KEYWORDS.keys())
 
 # =====================
@@ -52,29 +52,23 @@ def classify_local(text):
 
 def classify_ai(text):
     if not HF_TOKEN:
-        return "neutral", 40.00
+        return "neutral", 40.0
 
     prompt = (
-        f"Which trigger does this text belong to: {', '.join(ALLOWED_TRIGGERS)}?\n"
-        f"Text: {text}"
+        f"К какому из триггеров относится текст: {', '.join(ALLOWED_TRIGGERS)}?\n"
+        f"Текст: {text}"
     )
     try:
-        r = requests.post(
-            HF_API_URL,
-            headers=HEADERS,
-            json={"inputs": prompt},
-            timeout=15
-        )
+        r = requests.post(HF_API_URL, headers=HEADERS, json={"inputs": prompt}, timeout=15)
         r.raise_for_status()
         result = r.json()
-        label = result["labels"][0]
-        score = float(result["scores"][0] * 100)
+        label = result.get("labels", [None])[0]
+        score = int(result.get("scores", [0])[0] * 100)
         if label in ALLOWED_TRIGGERS:
-            return label, round(score, 2)
+            return label, score
     except Exception:
         pass
-
-    return "neutral", 40.00
+    return "neutral", 40.0
 
 def analyze(texts):
     rows = []
@@ -82,87 +76,76 @@ def analyze(texts):
         label, conf = classify_local(text)
         if not label:
             label, conf = classify_ai(text)
-
-        rows.append({
-            "id": i,
-            "text": text,
-            "trigger": label,
-            "confidence_%": conf
-        })
+        rows.append({"id": i, "text": text, "trigger": label, "confidence_%": conf})
     return pd.DataFrame(rows)
 
+# =====================
+# TONE SUMMARY
+# =====================
 def build_tone_summary(df):
-    summary = df.groupby("trigger").size().reset_index(name="count")
+    tone_map = {"negative": "Negative", "complaint": "Negative",
+                "praise": "Positive", "warning": "Negative",
+                "info": "Neutral", "suggestion": "Neutral", "question": "Neutral"}
+    df["tone"] = df["trigger"].map(tone_map).fillna("Neutral")
+    summary = df.groupby("tone").size().reset_index(name="count")
     total = summary["count"].sum()
     summary["percent"] = (summary["count"] / total * 100).round(2)
     return summary
 
 # =====================
+# HEADER
+# =====================
+st.markdown("### Smart Triggers Analyzer")
+
+# =====================
 # INPUT BLOCK
 # =====================
-st.markdown("### Введите текст или загрузите файл")
-
-# текстовое поле с кнопкой параллельно
 col_text, col_analyze = st.columns([4, 1])
 with col_text:
     manual_text = st.text_area("", placeholder="Введите текст…", height=80)
 with col_analyze:
-    analyze_click = st.button("Начать анализ", use_container_width=True, key="btn_text", help="Запустить анализ текста")
+    analyze_click = st.button("Начать анализ", use_container_width=True)
 
-# файл с кнопкой параллельно
 col_file, col_upload = st.columns([4, 1])
 with col_file:
-    uploaded = st.file_uploader("", type=["csv", "txt"], key="file_uploader")
+    uploaded = st.file_uploader("", type=["csv", "txt"], label_visibility="collapsed")
 with col_upload:
-    st.markdown("")
-    upload_click = st.button("Загрузить файл", use_container_width=True, key="btn_file", help="Загрузить и проанализировать файл")
+    upload_click = st.button("Загрузить файл", use_container_width=True)
 
 # =====================
-# PROCESSING
+# COLLECT TEXTS
 # =====================
 texts = []
-
-if manual_text.strip():
+if manual_text.strip() and analyze_click:
     texts.append(manual_text.strip())
 
 if uploaded:
     try:
         df_uploaded = read_uploaded_file(uploaded)
         texts.extend(df_uploaded["text"].tolist())
-        analyze_click = True  # автоматически запускаем анализ после загрузки
     except Exception as e:
         st.error(f"Ошибка файла: {e}")
 
-if analyze_click and texts:
+# =====================
+# ANALYSIS
+# =====================
+if texts:
+    df_result = analyze(texts)
     st.divider()
     st.markdown("### Результаты анализа")
-
-    df_result = analyze(texts)
     st.dataframe(df_result, use_container_width=True)
 
     # Summary table
     df_summary = build_tone_summary(df_result)
-    st.markdown("### Сводка по тональности (%)")
-    st.table(df_summary)
+    st.markdown("### Тональность в %")
+    st.dataframe(df_summary, use_container_width=True)
 
-    # CSV download
+    # EXPORT
     csv_bytes = df_result.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button(
-        "Скачать CSV",
-        csv_bytes,
-        "smart_triggers_result.csv",
-        "text/csv",
-        key="download_csv"
-    )
+    excel_bytes = df_result.to_excel(index=False, engine="openpyxl").to_bytes()
 
-    # Excel download
-    excel_path = "smart_triggers_result.xlsx"
-    df_result.to_excel(excel_path, index=False, engine="xlsxwriter")
-    with open(excel_path, "rb") as f:
-        st.download_button(
-            "Скачать Excel",
-            f.read(),
-            "smart_triggers_result.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_excel"
-        )
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("Скачать CSV", csv_bytes, "smart_triggers_result.csv", "text/csv")
+    with col2:
+        st.download_button("Скачать Excel", excel_bytes, "smart_triggers_result.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
