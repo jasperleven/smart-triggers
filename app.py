@@ -185,3 +185,4 @@ if analyze_click or uploaded:
         df_summary = build_tone_summary(df_result)
         st.markdown("### Сводная таблица по тону комментариев")
         st.dataframe(df_summary, use_container_width=True)
+
