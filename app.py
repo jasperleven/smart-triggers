@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-HF_TOKEN = os.getenv("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")  # добавь свой токен через переменную окружения
+HF_TOKEN = os.getenv("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")  # вставь свой токен в переменные окружения
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
 # =====================
@@ -91,9 +91,6 @@ def analyze(texts):
         })
     return pd.DataFrame(rows)
 
-# =====================
-# TONE SUMMARY
-# =====================
 def build_tone_summary(df):
     summary = df.groupby("trigger").size().reset_index(name="count")
     total = summary["count"].sum()
@@ -101,17 +98,24 @@ def build_tone_summary(df):
     return summary
 
 # =====================
-# HEADER + INPUT
+# INPUT BLOCK
 # =====================
-st.markdown("### Enter text or upload file for analysis")
+st.markdown("### Введите текст или загрузите файл")
 
-col_input, col_button = st.columns([4, 1])
-with col_input:
-    manual_text = st.text_area("", placeholder="Enter text…", height=80)
-with col_button:
-    analyze_click = st.button("Start Analysis", use_container_width=True, key="btn_text")
+# текстовое поле с кнопкой параллельно
+col_text, col_analyze = st.columns([4, 1])
+with col_text:
+    manual_text = st.text_area("", placeholder="Введите текст…", height=80)
+with col_analyze:
+    analyze_click = st.button("Начать анализ", use_container_width=True, key="btn_text", help="Запустить анализ текста")
 
-uploaded = st.file_uploader("Or upload CSV/TXT file", type=["csv", "txt"], key="file_uploader")
+# файл с кнопкой параллельно
+col_file, col_upload = st.columns([4, 1])
+with col_file:
+    uploaded = st.file_uploader("", type=["csv", "txt"], key="file_uploader")
+with col_upload:
+    st.markdown("")
+    upload_click = st.button("Загрузить файл", use_container_width=True, key="btn_file", help="Загрузить и проанализировать файл")
 
 # =====================
 # PROCESSING
@@ -127,24 +131,24 @@ if uploaded:
         texts.extend(df_uploaded["text"].tolist())
         analyze_click = True  # автоматически запускаем анализ после загрузки
     except Exception as e:
-        st.error(f"File error: {e}")
+        st.error(f"Ошибка файла: {e}")
 
 if analyze_click and texts:
     st.divider()
-    st.markdown("### Analysis Results")
+    st.markdown("### Результаты анализа")
 
     df_result = analyze(texts)
     st.dataframe(df_result, use_container_width=True)
 
-    # Tone summary table
+    # Summary table
     df_summary = build_tone_summary(df_result)
-    st.markdown("### Summary by Trigger (%)")
+    st.markdown("### Сводка по тональности (%)")
     st.table(df_summary)
 
     # CSV download
     csv_bytes = df_result.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
     st.download_button(
-        "Download CSV",
+        "Скачать CSV",
         csv_bytes,
         "smart_triggers_result.csv",
         "text/csv",
@@ -152,12 +156,13 @@ if analyze_click and texts:
     )
 
     # Excel download
-    excel_bytes = pd.ExcelWriter("smart_triggers_result.xlsx", engine="xlsxwriter")
-    df_result.to_excel("smart_triggers_result.xlsx", index=False)
-    st.download_button(
-        "Download Excel",
-        open("smart_triggers_result.xlsx", "rb").read(),
-        "smart_triggers_result.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="download_excel"
-    )
+    excel_path = "smart_triggers_result.xlsx"
+    df_result.to_excel(excel_path, index=False, engine="xlsxwriter")
+    with open(excel_path, "rb") as f:
+        st.download_button(
+            "Скачать Excel",
+            f.read(),
+            "smart_triggers_result.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_excel"
+        )
