@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import requests
@@ -60,10 +59,11 @@ TRIGGERS_KEYWORDS = {
     ],
     "negative": [
         "ненавижу", "бесит", "ужас", "отвратительно", "достало",
-        "хуже", "разочарование", "кошмар", "невозможно"
+        "хуже", "худший", "разочарование", "кошмар", "невозможно"
     ],
     "question": [
-        "как", "почему", "когда", "можно ли", "что делать"
+        "как", "почему", "когда", "можно ли", "что делать",
+        "платно", "бесплатно"
     ],
     "suggestion": [
         "было бы круто", "предлагаю", "советую", "можно добавить",
@@ -106,7 +106,11 @@ def read_csv_or_txt(uploaded_file):
 
 def read_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
-    return df.iloc[:, 0].astype(str).tolist()
+    col = df.iloc[:, 0]
+    col = col.dropna()
+    col = col.astype(str)
+    col = col[col.str.strip() != ""]
+    return col.tolist()
 
 # =====================
 # CLASSIFICATION
@@ -168,9 +172,8 @@ def classify_ai(text):
 # =====================
 def analyze(texts):
     rows = []
-    clean_texts = [str(t).strip() for t in texts if str(t).strip()]
 
-    for i, text in enumerate(clean_texts, 1):
+    for i, text in enumerate(texts, 1):
         trigger, conf = classify_local(text)
 
         if not trigger:
@@ -187,6 +190,13 @@ def analyze(texts):
             trigger_final = trigger
             confidence_final = conf
 
+        if trigger in ["complaint", "negative", "warning"]:
+            tone = "negative"
+        elif trigger == "praise":
+            tone = "positive"
+        else:
+            tone = "neutral"
+
         if trigger_final in ["complaint", "negative", "warning"]:
             tone_final = "negative"
         elif trigger_final == "praise":
@@ -199,7 +209,7 @@ def analyze(texts):
             "text": text,
             "trigger": trigger,
             "confidence_%": conf,
-            "tone": "negative" if trigger in ["complaint", "negative", "warning"] else "positive" if trigger == "praise" else "neutral",
+            "tone": tone,
             "trigger_final": trigger_final,
             "confidence_final": confidence_final,
             "tone_final": tone_final
@@ -246,14 +256,18 @@ if uploaded:
 if analyze_click or uploaded:
     if texts:
         st.divider()
+
         df_result = analyze(texts)
+
+        avg_confidence = round(df_result["confidence_final"].mean(), 2)
+        st.markdown(f"**Средний confidence_final по файлу:** {avg_confidence}%")
 
         st.markdown("### Результаты анализа")
         st.dataframe(df_result, use_container_width=True)
 
         excel_buffer = BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
-            df_result.to_excel(writer, index=False, sheet_name="Results")
+            df_result.to_excel(writer, index=False, sheet_name="Результаты")
 
         st.download_button(
             "Скачать Excel",
