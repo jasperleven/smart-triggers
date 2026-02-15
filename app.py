@@ -185,10 +185,8 @@ def analyze(texts):
 
         if conf < CONFIDENCE_THRESHOLD:
             trigger_final = "neutral"
-            confidence_final = 40.0
         else:
             trigger_final = trigger
-            confidence_final = conf
 
         if trigger in ["complaint", "negative", "warning"]:
             tone = "negative"
@@ -197,22 +195,13 @@ def analyze(texts):
         else:
             tone = "neutral"
 
-        if trigger_final in ["complaint", "negative", "warning"]:
-            tone_final = "negative"
-        elif trigger_final == "praise":
-            tone_final = "positive"
-        else:
-            tone_final = "neutral"
-
         rows.append({
             "id": i,
             "text": text,
             "trigger": trigger,
             "confidence_%": conf,
             "tone": tone,
-            "trigger_final": trigger_final,
-            "confidence_final": confidence_final,
-            "tone_final": tone_final
+            "trigger_final": trigger_final
         })
 
     return pd.DataFrame(rows)
@@ -259,15 +248,25 @@ if analyze_click or uploaded:
 
         df_result = analyze(texts)
 
-        avg_confidence = round(df_result["confidence_final"].mean(), 2)
-        st.markdown(f"**Средний confidence_final по файлу:** {avg_confidence}%")
+        avg_confidence = round(df_result["confidence_%"].mean(), 2)
+        st.markdown(f"**Средний confidence по файлу:** {avg_confidence}%")
 
         st.markdown("### Результаты анализа")
         st.dataframe(df_result, use_container_width=True)
 
+        # =====================
+        # Excel Export
+        # =====================
         excel_buffer = BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
-            df_result.to_excel(writer, index=False, sheet_name="Результаты")
+            # Лист 1: основные результаты, только 6 колонок
+            df_result[['id', 'text', 'trigger', 'confidence_%', 'tone', 'trigger_final']] \
+                .to_excel(writer, index=False, sheet_name="Результаты")
+
+            # Лист 2: сводка по tone
+            summary = df_result.groupby('tone')['confidence_%'].mean().reset_index()
+            summary.rename(columns={'confidence_%': 'avg_confidence'}, inplace=True)
+            summary.to_excel(writer, index=False, sheet_name="Сводка")
 
         st.download_button(
             "Скачать Excel",
