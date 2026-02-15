@@ -23,11 +23,10 @@ HF_TOKEN = st.sidebar.text_input(
     type="password",
     help="Нужен для повышения точности классификации"
 )
-
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
 # =====================
-# CSS
+# CSS для кнопки и textarea
 # =====================
 st.markdown("""
 <style>
@@ -35,12 +34,14 @@ textarea {
     height: 50px !important;
 }
 .stButton > button {
-    background-color: #e74c3c;
-    color: white;
-    height: 50px;
+    background-color: #e74c3c !important;  /* красная кнопка */
+    color: white !important;                /* белый текст */
+    height: 50px !important;                /* фиксированная высота */
+    width: 100% !important;                 /* растянуть на весь контейнер */
+    font-size: 16px !important;             /* читаемый шрифт */
 }
 .stButton {
-    margin-top: 28px;
+    margin-top: 28px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -49,35 +50,15 @@ textarea {
 # TRIGGERS
 # =====================
 TRIGGERS_KEYWORDS = {
-    "negative": [
-        "ненавижу", "бесит", "ужас", "отвратительно", "достало",
-        "хуже", "худший", "разочарование", "кошмар", "невозможно"
-    ],
-    "complaint": [
-        "не работает", "проблема", "не пришёл", "не получил",
-        "поддержка молчит", "деньги списали", "не могу"
-    ],
-    "praise": [
-        "отлично", "супер", "круто", "хорошо", "доволен",
-        "спасибо", "приятно удивлён"
-    ],
-    "warning": [
-        "ошибка", "сбой", "вылетает", "не загружается", "лагает"
-    ],
-    "info": [
-        "обновление", "новая версия", "информация", "новости",
-        "вышло", "добавили"
-    ],
-    "suggestion": [
-        "было бы круто", "предлагаю", "советую", "можно добавить",
-        "хотелось бы"
-    ],
-    "question": [
-        "как", "почему", "когда", "можно ли", "что делать",
-        "платно", "бесплатно"
-    ]
+    "negative": ["ненавижу", "бесит", "ужас", "отвратительно", "достало", "хуже", "разочарование", "кошмар", "невозможно"],
+    "complaint": ["не работает", "проблема", "не пришёл", "не получил", "поддержка молчит", "деньги списали", "не могу"],
+    "praise": ["отлично", "супер", "круто", "хорошо", "доволен", "спасибо", "приятно удивлён", "хороший", "отличный"],
+    "warning": ["ошибка", "сбой", "вылетает", "не загружается", "лагает"],
+    "info": ["обновление", "новая версия", "информация", "новости", "вышло", "добавили"],
+    "suggestion": ["было бы круто", "предлагаю", "советую", "можно добавить", "хотелось бы"],
+    "question": ["как", "почему", "когда", "можно ли", "что делать"],
+    "spam": ["подпишись", "ставки", "казино", "крипта"]
 }
-
 ALLOWED_TRIGGERS = list(TRIGGERS_KEYWORDS.keys())
 
 # =====================
@@ -92,14 +73,9 @@ def read_csv_or_txt(uploaded_file):
         lines = lines[1:]
     return lines
 
-
 def read_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
-    col = df.iloc[:, 0]
-    col = col.dropna()
-    col = col.astype(str)
-    col = col[col.str.strip() != ""]
-    return col.tolist()
+    return [str(x).strip() for x in df.iloc[:, 0].tolist() if str(x).strip()]
 
 # =====================
 # CLASSIFICATION
@@ -111,13 +87,10 @@ def classify_local(text):
             return trigger, round(88 + hash(text) % 10 + 0.37, 2)
     return None, None
 
-
 def classify_ai(text):
     if not HF_TOKEN:
         return "neutral", 40.00
-
     prompt = f"К какому триггеру относится текст ({', '.join(ALLOWED_TRIGGERS)}): {text}"
-
     try:
         r = requests.post(
             HF_API_URL,
@@ -140,31 +113,41 @@ def analyze(texts):
         trigger, conf = classify_local(text)
         if not trigger:
             trigger, conf = classify_ai(text)
-
-        if not trigger:
-            trigger = "neutral"
-            conf = 40.0
-
-        # Определяем tone по trigger
-        if trigger in ["negative", "complaint", "warning"]:
-            tone = "negative"
-        elif trigger == "praise":
-            tone = "positive"
-        elif trigger == "question":
-            tone = "neutral"
-        else:
-            tone = "neutral"
-
+        # Переносим триггер в trigger_final без замены tone
         result.append({
             "id": i,
             "text": text,
             "trigger": trigger,
             "confidence_%": conf,
-            "tone": tone
+            "tone": map_tone(trigger),
+            "trigger_final": trigger
         })
+    return pd.DataFrame(result)
 
-    df = pd.DataFrame(result)
-    return df
+# =====================
+# MAP TONE
+# =====================
+def map_tone(trigger):
+    tone_map = {
+        "negative": "negative",
+        "complaint": "negative",
+        "warning": "negative",
+        "praise": "positive",
+        "info": "neutral",
+        "suggestion": "neutral",
+        "question": "neutral",
+        "spam": "neutral"
+    }
+    return tone_map.get(trigger, "neutral")
+
+# =====================
+# SUMMARY
+# =====================
+def summarize(df):
+    summary = df.groupby("tone").size().reset_index(name="count")
+    total = summary["count"].sum()
+    summary["percent"] = (summary["count"] / total * 100).round(2)
+    return summary
 
 # =====================
 # UI
@@ -184,7 +167,7 @@ with col_button:
     analyze_click = st.button("Начать анализ", use_container_width=True)
 
 uploaded = st.file_uploader(
-    label="Загрузить файл",
+    "Загрузить файл",  # здесь Tilda будет использовать русский
     type=["csv", "txt", "xlsx"]
 )
 
@@ -192,7 +175,6 @@ uploaded = st.file_uploader(
 # PROCESS
 # =====================
 texts = []
-
 if manual_text.strip():
     texts.append(manual_text.strip())
 
@@ -205,45 +187,25 @@ if uploaded:
 if analyze_click or uploaded:
     if texts:
         st.divider()
-
         df_result = analyze(texts)
+        df_summary = summarize(df_result)
 
         # =====================
-        # trigger_final: релевантные триггеры + spam
+        # UI RESULTS
         # =====================
-        spam_keywords = ["подпишись", "заработай", "ставки", "казино", "крипта", "пиши в личку"]
-
-        def get_trigger_final(trigger, text):
-            t_lower = text.lower()
-            if any(w in t_lower for w in spam_keywords):
-                return "spam"
-            return trigger if trigger in ["complaint", "warning", "negative", "praise", "suggestion", "question", "info"] else "neutral"
-
-        df_result['trigger_final'] = df_result.apply(lambda row: get_trigger_final(row['trigger'], row['text']), axis=1)
-
-        # spam всегда neutral
-        df_result['tone'] = df_result.apply(lambda row: "neutral" if row['trigger_final'] == "spam" else row['tone'], axis=1)
-
         st.markdown("### Результаты анализа")
         st.dataframe(df_result, use_container_width=True)
 
+        st.markdown("### Сводка по тональности")
+        st.dataframe(df_summary, use_container_width=True)
+
         # =====================
-        # Excel Export
+        # EXPORT EXCEL
         # =====================
         excel_buffer = BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
-            # Лист 1: результаты (6 колонок)
-            df_result[['id', 'text', 'trigger', 'confidence_%', 'tone', 'trigger_final']] \
-                .to_excel(writer, index=False, sheet_name="Результаты")
-
-            # Лист 2: сводка по tone (проценты)
-            tone_counts = df_result['tone'].value_counts(normalize=True).mul(100).round(2)
-            summary = pd.DataFrame({
-                'tone': tone_counts.index,
-                'percent': tone_counts.values
-            })
-            summary.to_excel(writer, index=False, sheet_name="Сводка")
-
+            df_result.to_excel(writer, index=False, sheet_name="Результаты")
+            df_summary.to_excel(writer, index=False, sheet_name="Сводка")
         st.download_button(
             "Скачать Excel",
             excel_buffer.getvalue(),
