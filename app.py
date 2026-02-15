@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import requests
@@ -13,6 +14,7 @@ st.set_page_config(
 )
 
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
+CONFIDENCE_THRESHOLD = 55.0
 
 # =====================
 # SIDEBAR — TOKEN
@@ -46,36 +48,46 @@ textarea {
 """, unsafe_allow_html=True)
 
 # =====================
-# TRIGGERS (УЛУЧШЕНЫ)
+# TRIGGERS
 # =====================
 TRIGGERS_KEYWORDS = {
-    "negative": [
-        "ненавижу", "бесит", "ужас", "отвратительно", "достало",
-        "хуже", "разочарование", "кошмар", "невозможно"
-    ],
     "complaint": [
         "не работает", "проблема", "не пришёл", "не получил",
         "поддержка молчит", "деньги списали", "не могу"
     ],
-    "praise": [
-        "отлично", "супер", "круто", "хорошо", "доволен",
-        "спасибо", "приятно удивлён"
-    ],
     "warning": [
         "ошибка", "сбой", "вылетает", "не загружается", "лагает"
     ],
-    "info": [
-        "обновление", "новая версия", "информация", "новости",
-        "вышло", "добавили"
+    "negative": [
+        "ненавижу", "бесит", "ужас", "отвратительно", "достало",
+        "хуже", "разочарование", "кошмар", "невозможно"
+    ],
+    "question": [
+        "как", "почему", "когда", "можно ли", "что делать"
     ],
     "suggestion": [
         "было бы круто", "предлагаю", "советую", "можно добавить",
         "хотелось бы"
     ],
-    "question": [
-        "как", "почему", "когда", "можно ли", "что делать"
+    "praise": [
+        "отлично", "супер", "круто", "хорошо", "доволен",
+        "спасибо", "приятно удивлён"
+    ],
+    "info": [
+        "обновление", "новая версия", "информация", "новости",
+        "вышло", "добавили"
     ]
 }
+
+TRIGGER_PRIORITY = [
+    "complaint",
+    "warning",
+    "negative",
+    "question",
+    "suggestion",
+    "praise",
+    "info"
+]
 
 ALLOWED_TRIGGERS = list(TRIGGERS_KEYWORDS.keys())
 
@@ -101,15 +113,40 @@ def read_excel(uploaded_file):
 # =====================
 def classify_local(text):
     t = text.lower()
+    matches = []
+
     for trigger, words in TRIGGERS_KEYWORDS.items():
-        if any(w in t for w in words):
-            return trigger, round(88 + hash(text) % 10 + 0.37, 2)
-    return None, None
+        count = sum(1 for w in words if w in t)
+        if count > 0:
+            matches.append((trigger, count))
+
+    if not matches:
+        return None, None
+
+    matches.sort(
+        key=lambda x: (
+            TRIGGER_PRIORITY.index(x[0]),
+            -x[1]
+        )
+    )
+
+    trigger, count = matches[0]
+
+    if count == 1:
+        confidence = 78.0
+    elif count == 2:
+        confidence = 86.0
+    elif count == 3:
+        confidence = 91.0
+    else:
+        confidence = 96.0
+
+    return trigger, confidence
 
 
 def classify_ai(text):
     if not HF_TOKEN:
-        return "neutral", 40.00
+        return None, None
 
     prompt = f"К какому триггеру относится текст ({', '.join(ALLOWED_TRIGGERS)}): {text}"
 
@@ -124,50 +161,51 @@ def classify_ai(text):
         data = r.json()
         return data["labels"][0], round(data["scores"][0] * 100, 2)
     except Exception:
-        return "neutral", 40.00
+        return None, None
 
 # =====================
 # ANALYZE
 # =====================
 def analyze(texts):
-    result = []
-    for i, text in enumerate(texts, 1):
+    rows = []
+    clean_texts = [str(t).strip() for t in texts if str(t).strip()]
+
+    for i, text in enumerate(clean_texts, 1):
         trigger, conf = classify_local(text)
+
         if not trigger:
             trigger, conf = classify_ai(text)
 
-        result.append({
+        if not trigger:
+            trigger = "neutral"
+            conf = 40.0
+
+        if conf < CONFIDENCE_THRESHOLD:
+            trigger_final = "neutral"
+            confidence_final = 40.0
+        else:
+            trigger_final = trigger
+            confidence_final = conf
+
+        if trigger_final in ["complaint", "negative", "warning"]:
+            tone_final = "negative"
+        elif trigger_final == "praise":
+            tone_final = "positive"
+        else:
+            tone_final = "neutral"
+
+        rows.append({
             "id": i,
             "text": text,
             "trigger": trigger,
-            "confidence_%": conf
+            "confidence_%": conf,
+            "tone": "negative" if trigger in ["complaint", "negative", "warning"] else "positive" if trigger == "praise" else "neutral",
+            "trigger_final": trigger_final,
+            "confidence_final": confidence_final,
+            "tone_final": tone_final
         })
 
-    df = pd.DataFrame(result)
-    return df
-
-# =====================
-# SUMMARY + MERGE
-# =====================
-def enrich_with_tone(df):
-    tone_map = {
-        "negative": "negative",
-        "complaint": "negative",
-        "warning": "negative",
-        "praise": "positive",
-        "info": "neutral",
-        "suggestion": "neutral",
-        "question": "neutral"
-    }
-
-    df["tone"] = df["trigger"].map(tone_map).fillna("neutral")
-
-    summary = df["tone"].value_counts().reset_index()
-    summary.columns = ["tone", "tone_count"]
-    summary["tone_percent"] = (summary["tone_count"] / summary["tone_count"].sum() * 100).round(2)
-
-    df = df.merge(summary, on="tone", how="left")
-    return df, summary
+    return pd.DataFrame(rows)
 
 # =====================
 # UI
@@ -187,7 +225,7 @@ with col_button:
     analyze_click = st.button("Начать анализ", use_container_width=True)
 
 uploaded = st.file_uploader(
-    "Загрузить файл",
+    label="Загрузить файл",
     type=["csv", "txt", "xlsx"]
 )
 
@@ -208,35 +246,14 @@ if uploaded:
 if analyze_click or uploaded:
     if texts:
         st.divider()
-
         df_result = analyze(texts)
-        df_result, df_summary = enrich_with_tone(df_result)
 
         st.markdown("### Результаты анализа")
         st.dataframe(df_result, use_container_width=True)
 
-        st.markdown("### Сводка по тональности")
-        st.dataframe(df_summary, use_container_width=True)
-
-        # CSV
-        csv_data = df_result.to_csv(
-            index=False,
-            sep=";",
-            encoding="utf-8-sig"
-        )
-
-        st.download_button(
-            "Скачать CSV",
-            csv_data,
-            "smart_triggers.csv",
-            mime="text/csv"
-        )
-
-        # Excel (2 листа)
         excel_buffer = BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
-            df_result.to_excel(writer, index=False, sheet_name="Результаты")
-            df_summary.to_excel(writer, index=False, sheet_name="Сводка")
+            df_result.to_excel(writer, index=False, sheet_name="Results")
 
         st.download_button(
             "Скачать Excel",
