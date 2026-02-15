@@ -160,8 +160,7 @@ def analyze(texts):
             "text": text,
             "trigger": trigger,
             "confidence_%": conf,
-            "tone": tone,
-            "trigger_final": trigger
+            "tone": tone
         })
 
     df = pd.DataFrame(result)
@@ -209,8 +208,21 @@ if analyze_click or uploaded:
 
         df_result = analyze(texts)
 
-        avg_confidence = round(df_result["confidence_%"].mean(), 2)
-        st.markdown(f"**Средний confidence по файлу:** {avg_confidence}%")
+        # =====================
+        # trigger_final: релевантные триггеры + spam
+        # =====================
+        spam_keywords = ["подпишись", "заработай", "ставки", "казино", "крипта", "пиши в личку"]
+
+        def get_trigger_final(trigger, text):
+            t_lower = text.lower()
+            if any(w in t_lower for w in spam_keywords):
+                return "spam"
+            return trigger if trigger in ["complaint", "warning", "negative", "praise", "suggestion", "question", "info"] else "neutral"
+
+        df_result['trigger_final'] = df_result.apply(lambda row: get_trigger_final(row['trigger'], row['text']), axis=1)
+
+        # spam всегда neutral
+        df_result['tone'] = df_result.apply(lambda row: "neutral" if row['trigger_final'] == "spam" else row['tone'], axis=1)
 
         st.markdown("### Результаты анализа")
         st.dataframe(df_result, use_container_width=True)
@@ -224,9 +236,12 @@ if analyze_click or uploaded:
             df_result[['id', 'text', 'trigger', 'confidence_%', 'tone', 'trigger_final']] \
                 .to_excel(writer, index=False, sheet_name="Результаты")
 
-            # Лист 2: сводка по tone с avg confidence
-            summary = df_result.groupby('tone')['confidence_%'].mean().reset_index()
-            summary.rename(columns={'confidence_%': 'avg_confidence'}, inplace=True)
+            # Лист 2: сводка по tone (проценты)
+            tone_counts = df_result['tone'].value_counts(normalize=True).mul(100).round(2)
+            summary = pd.DataFrame({
+                'tone': tone_counts.index,
+                'percent': tone_counts.values
+            })
             summary.to_excel(writer, index=False, sheet_name="Сводка")
 
         st.download_button(
