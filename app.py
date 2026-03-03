@@ -13,14 +13,14 @@ st.set_page_config(
 )
 
 # =====================
-# SIDEBAR — TOKEN (не мешает, оставляем)
+# SIDEBAR — TOKEN
 # =====================
-with st.sidebar.expander("🔑 HuggingFace Token", expanded=False):
-    HF_TOKEN = st.text_input(
-        "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",
-        type="password",
-        help="Опционально. Используется для будущих AI-улучшений"
-    )
+HF_TOKEN = st.sidebar.text_input(
+    "Вставь HF токен",
+    value="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",  # твой токен
+    type="password",
+    help="Опционально. Используется для AI-улучшений"
+)
 
 # =====================
 # CSS
@@ -34,17 +34,17 @@ textarea { height: 50px !important; }
 """, unsafe_allow_html=True)
 
 # =====================
-# TRIGGERS (локальный словарь)
+# TRIGGERS (ЛОКАЛЬНЫЕ)
 # =====================
 TRIGGERS_KEYWORDS = {
-    "spam": ["заработай", "подпишись", "казино", "ставки", "крипта", "пиши в личку", "доход", "инвестиции"],
-    "complaint": ["не работает", "не пришёл", "не получил", "деньги списали", "поддержка молчит", "проблема", "не могу", "не войти", "не заходит"],
-    "warning": ["ошибка", "сбой", "вылетает", "лагает", "не загружается", "нестабильно", "долго грузится"],
-    "negative": ["ненавижу", "бесит", "ужас", "отвратительно", "отвратительный", "кошмар", "разочарование", "хуже", "худший"],
-    "suggestion": ["было бы круто", "предлагаю", "советую", "можно добавить", "хотелось бы", "хочу предложить"],
-    "praise": ["отлично", "супер", "круто", "доволен", "спасибо", "отличный", "приятно удивлён"],
-    "question": ["как", "почему", "когда", "можно ли", "что делать", "подскажите", "платно", "бесплатно", "?"],
-    "info": ["обновление", "версия", "добавили", "вышло", "информация"]
+    "spam": ["заработай","подпишись","казино","ставки","крипта","пиши в личку","доход","инвестиции"],
+    "complaint": ["не работает","не пришёл","не получил","деньги списали","поддержка молчит","проблема","не могу","не войти","не заходит"],
+    "warning": ["ошибка","сбой","вылетает","лагает","не загружается","нестабильно","долго грузится"],
+    "negative": ["ненавижу","бесит","ужас","отвратительно","отвратительный","кошмар","разочарование","хуже","худший"],
+    "suggestion": ["было бы круто","предлагаю","советую","можно добавить","хотелось бы","хочу предложить"],
+    "praise": ["отлично","супер","круто","доволен","спасибо","отличный","приятно удивлён"],
+    "question": ["как","почему","когда","можно ли","что делать","подскажите","платно","бесплатно","?"],
+    "info": ["обновление","версия","добавили","вышло","информация"]
 }
 
 # =====================
@@ -78,11 +78,12 @@ def spam_confidence(text):
     return round(90 + hash(text) % 8, 2)
 
 # =====================
-# CLASSIFICATION (RULE-BASED)
+# LOCAL CLASSIFICATION
 # =====================
 def classify_local(text):
     t = text.lower()
-    PRIORITY = ["spam", "complaint", "warning", "negative", "suggestion", "praise", "question", "info"]
+    PRIORITY = ["spam","complaint","warning","negative","suggestion","praise","question","info"]
+
     for trigger in PRIORITY:
         for w in TRIGGERS_KEYWORDS.get(trigger, []):
             if w in t:
@@ -92,61 +93,49 @@ def classify_local(text):
     return "neutral", neutral_confidence(text)
 
 # =====================
-# CLASSIFICATION (AI)
+# AI CLASSIFIER
 # =====================
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def get_ai_classifier():
     return pipeline(
         "text-classification",
         model="cointegrated/rubert-tiny2-bert-base",
-        device=-1
+        device=-1,
+        use_auth_token=HF_TOKEN
     )
 
 def classify_ai(text):
-    classifier_ai = get_ai_classifier()
-    result = classifier_ai(text, truncation=True)
-    label = result[0]['label'].lower()
-    score = round(result[0]['score'] * 100, 2)
-
-    if "вопрос" in label or "question" in label:
-        trigger = "question"
-        tone = "neutral"
-    elif "похвала" in label or "praise" in label or "positive" in label:
-        trigger = "praise"
-        tone = "positive"
-    elif "жалоба" in label or "complaint" in label or "negative" in label:
-        trigger = "complaint"
-        tone = "negative"
-    else:
-        trigger = "neutral"
-        tone = "neutral"
-
-    return trigger, score, tone
+    try:
+        classifier_ai = get_ai_classifier()
+        pred = classifier_ai(text[:512])[0]  # обрезаем длинные тексты
+        label = pred["label"].lower()
+        score = round(pred["score"] * 100, 2)
+        if "neutral" in label:
+            tone = "neutral"
+        elif "negative" in label:
+            tone = "negative"
+        else:
+            tone = "positive"
+        return label, score, tone
+    except Exception:
+        return classify_local(text) + ("neutral",)  # fallback на локальный
+        
 
 # =====================
 # ANALYZE
 # =====================
 def analyze(texts):
     result = []
-
     for i, text in enumerate(texts, 1):
-        trigger_local, conf_local = classify_local(text)
         trigger_ai, conf_ai, tone_ai = classify_ai(text)
-
-        # ИИ в приоритете
-        trigger_final = trigger_ai
-        confidence_final = conf_ai
-        tone_final = tone_ai
-
         result.append({
             "id": i,
             "text": text,
-            "trigger": trigger_final,
-            "confidence_%": confidence_final,
-            "tone": tone_final,
-            "trigger_final": trigger_final
+            "trigger": trigger_ai,
+            "confidence_%": conf_ai,
+            "tone": tone_ai,
+            "trigger_final": trigger_ai
         })
-
     return pd.DataFrame(result)
 
 # =====================
@@ -154,8 +143,8 @@ def analyze(texts):
 # =====================
 def build_summary(df):
     summary = df.groupby("tone").agg(
-        tone_percent=("tone", lambda x: round(len(x) / len(df) * 100, 2)),
-        avg_confidence=("confidence_%", "mean")
+        tone_percent=("tone", lambda x: round(len(x)/len(df)*100,2)),
+        avg_confidence=("confidence_%","mean")
     ).reset_index()
     summary["avg_confidence"] = summary["avg_confidence"].round(2)
     return summary
@@ -165,18 +154,17 @@ def build_summary(df):
 # =====================
 st.markdown("### Автоматический анализ текстов")
 
-col_text, col_button = st.columns([5, 1])
+col_text, col_button = st.columns([5,1])
 with col_text:
     manual_text = st.text_area("", placeholder="Введите текст для анализа…")
 with col_button:
     analyze_click = st.button("Начать анализ", use_container_width=True)
 
-uploaded = st.file_uploader("Загрузить файл", type=["csv", "txt", "xlsx"])
+uploaded = st.file_uploader("Загрузить файл", type=["csv","txt","xlsx"])
 
 texts = []
 if manual_text.strip():
     texts.append(manual_text.strip())
-
 if uploaded:
     if uploaded.name.endswith(".xlsx"):
         texts.extend(read_excel(uploaded))
@@ -200,7 +188,6 @@ if analyze_click or uploaded:
         with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
             df_result.to_excel(writer, index=False, sheet_name="Результаты")
             df_summary.to_excel(writer, index=False, sheet_name="Сводка")
-
         st.download_button(
             "Скачать Excel",
             buffer.getvalue(),
