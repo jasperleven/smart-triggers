@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
-import chardet
 from io import BytesIO
-from transformers import pipeline
+import requests
+import chardet
 
 # =====================
 # CONFIG
@@ -15,26 +15,26 @@ st.set_page_config(
 # =====================
 # SIDEBAR — TOKEN
 # =====================
-HF_TOKEN = st.sidebar.text_input(
-    "Вставь HF токен",
-    value="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",  # твой токен
-    type="password",
-    help="Опционально. Используется для AI-улучшений"
-)
+with st.sidebar.expander("🔑 HuggingFace Token", expanded=False):
+    HF_TOKEN = st.text_input(
+        "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",
+        type="password",
+        help="Обязательно для AI-анализа"
+    )
 
 # =====================
 # CSS
 # =====================
 st.markdown("""
 <style>
-textarea { height: 50px !important; }
-.stButton > button { background-color: #e74c3c !important; color: white !important; height: 50px; }
-.stButton { margin-top: 28px; }
+textarea {height: 50px !important;}
+.stButton > button {background-color: #e74c3c !important; color: white !important; height: 50px;}
+.stButton {margin-top: 28px;}
 </style>
 """, unsafe_allow_html=True)
 
 # =====================
-# TRIGGERS (ЛОКАЛЬНЫЕ)
+# TRIGGERS
 # =====================
 TRIGGERS_KEYWORDS = {
     "spam": ["заработай","подпишись","казино","ставки","крипта","пиши в личку","доход","инвестиции"],
@@ -68,58 +68,55 @@ def read_excel(uploaded_file):
 # =====================
 def neutral_confidence(text):
     length = len(text.strip())
-    if length < 5:
-        return 45.0
-    if length < 15:
-        return 60.0
+    if length < 5: return 45.0
+    if length < 15: return 60.0
     return round(88 + min(length, 120) * 0.08, 2)
 
 def spam_confidence(text):
     return round(90 + hash(text) % 8, 2)
 
 # =====================
-# LOCAL CLASSIFICATION
+# CLASSIFICATION (RULE-BASED)
 # =====================
 def classify_local(text):
     t = text.lower()
     PRIORITY = ["spam","complaint","warning","negative","suggestion","praise","question","info"]
-
     for trigger in PRIORITY:
         for w in TRIGGERS_KEYWORDS.get(trigger, []):
             if w in t:
-                if trigger == "spam":
-                    return "spam", spam_confidence(text)
+                if trigger == "spam": return "spam", spam_confidence(text)
                 return trigger, round(88 + hash(text) % 10 + 0.37, 2)
     return "neutral", neutral_confidence(text)
 
 # =====================
-# AI CLASSIFIER
+# AI CLASSIFICATION (HuggingFace Inference API)
 # =====================
-@st.cache_resource(show_spinner=False)
-def get_ai_classifier():
-    return pipeline(
-        "text-classification",
-        model="cointegrated/rubert-tiny2-bert-base",
-        device=-1,
-        use_auth_token=HF_TOKEN
-    )
-
 def classify_ai(text):
+    if not HF_TOKEN:
+        return None, None, None
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {"inputs": text}
     try:
-        classifier_ai = get_ai_classifier()
-        pred = classifier_ai(text[:512])[0]  # обрезаем длинные тексты
-        label = pred["label"].lower()
-        score = round(pred["score"] * 100, 2)
-        if "neutral" in label:
-            tone = "neutral"
-        elif "negative" in label:
-            tone = "negative"
-        else:
-            tone = "positive"
-        return label, score, tone
-    except Exception:
-        return classify_local(text) + ("neutral",)  # fallback на локальный
-        
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/cointegrated/rubert-tiny2-bert-base",
+            headers=headers,
+            json=payload,
+            timeout=15
+        )
+        if response.status_code == 200:
+            data = response.json()
+            # Берем label с наибольшей вероятностью
+            if isinstance(data, list) and len(data) > 0:
+                label = data[0].get("label", "").lower()
+                score = float(data[0].get("score", 0.0) * 100)
+                # Определяем тональность
+                if label in ["negative","complaint","warning"]: tone = "negative"
+                elif label == "praise": tone = "positive"
+                else: tone = "neutral"
+                return label, score, tone
+    except Exception as e:
+        st.warning(f"AI classification failed: {e}")
+    return None, None, None
 
 # =====================
 # ANALYZE
@@ -127,14 +124,29 @@ def classify_ai(text):
 def analyze(texts):
     result = []
     for i, text in enumerate(texts, 1):
-        trigger_ai, conf_ai, tone_ai = classify_ai(text)
+        # сначала локальные правила
+        trigger, conf = classify_local(text)
+        tone = (
+            "negative" if trigger in ["negative","complaint","warning"]
+            else "positive" if trigger == "praise"
+            else "neutral"
+        )
+
+        # если есть токен, используем AI для уточнения
+        if HF_TOKEN:
+            trigger_ai, conf_ai, tone_ai = classify_ai(text)
+            if trigger_ai:
+                trigger = trigger_ai
+                conf = conf_ai
+                tone = tone_ai
+
         result.append({
             "id": i,
             "text": text,
-            "trigger": trigger_ai,
-            "confidence_%": conf_ai,
-            "tone": tone_ai,
-            "trigger_final": trigger_ai
+            "trigger": trigger,
+            "confidence_%": round(conf,2),
+            "tone": tone,
+            "trigger_final": trigger
         })
     return pd.DataFrame(result)
 
@@ -153,7 +165,6 @@ def build_summary(df):
 # UI
 # =====================
 st.markdown("### Автоматический анализ текстов")
-
 col_text, col_button = st.columns([5,1])
 with col_text:
     manual_text = st.text_area("", placeholder="Введите текст для анализа…")
@@ -161,25 +172,19 @@ with col_button:
     analyze_click = st.button("Начать анализ", use_container_width=True)
 
 uploaded = st.file_uploader("Загрузить файл", type=["csv","txt","xlsx"])
-
 texts = []
-if manual_text.strip():
-    texts.append(manual_text.strip())
+if manual_text.strip(): texts.append(manual_text.strip())
 if uploaded:
-    if uploaded.name.endswith(".xlsx"):
-        texts.extend(read_excel(uploaded))
-    else:
-        texts.extend(read_csv_or_txt(uploaded))
+    if uploaded.name.endswith(".xlsx"): texts.extend(read_excel(uploaded))
+    else: texts.extend(read_csv_or_txt(uploaded))
 
 if analyze_click or uploaded:
     if texts:
         st.divider()
         df_result = analyze(texts)
         df_summary = build_summary(df_result)
-
         st.markdown("### Результаты анализа")
         st.dataframe(df_result, use_container_width=True)
-
         st.markdown("### Сводка по тональности")
         st.dataframe(df_summary, use_container_width=True)
 
@@ -188,6 +193,7 @@ if analyze_click or uploaded:
         with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
             df_result.to_excel(writer, index=False, sheet_name="Результаты")
             df_summary.to_excel(writer, index=False, sheet_name="Сводка")
+
         st.download_button(
             "Скачать Excel",
             buffer.getvalue(),
