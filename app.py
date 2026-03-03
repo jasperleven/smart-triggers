@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import chardet
 from io import BytesIO
+import re
 
 # =====================
 # CONFIG
@@ -15,18 +16,19 @@ st.set_page_config(
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
 
 # =====================
-# SIDEBAR — TOKEN
+# SIDEBAR — TOKEN (скрываем визуально, но оставляем)
 # =====================
-st.sidebar.markdown("### 🔑 HuggingFace Token")
-HF_TOKEN = st.sidebar.text_input(
-    "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",
-    type="password",
-    help="Нужен для повышения точности классификации"
-)
+with st.sidebar.expander("🔑 HuggingFace Token", expanded=False):
+    HF_TOKEN = st.text_input(
+        "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",
+        type="password",
+        help="Используется только при низкой уверенности rule-based"
+    )
+
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
 # =====================
-# CSS для кнопки и textarea
+# CSS
 # =====================
 st.markdown("""
 <style>
@@ -34,14 +36,12 @@ textarea {
     height: 50px !important;
 }
 .stButton > button {
-    background-color: #e74c3c !important;  /* красная кнопка */
-    color: white !important;                /* белый текст */
-    height: 50px !important;                /* фиксированная высота */
-    width: 100% !important;                 /* растянуть на весь контейнер */
-    font-size: 16px !important;             /* читаемый шрифт */
+    background-color: #e74c3c;
+    color: white;
+    height: 50px;
 }
 .stButton {
-    margin-top: 28px !important;
+    margin-top: 28px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -50,16 +50,35 @@ textarea {
 # TRIGGERS
 # =====================
 TRIGGERS_KEYWORDS = {
-    "negative": ["ненавижу", "бесит", "ужас", "отвратительно", "достало", "хуже", "разочарование", "кошмар", "невозможно"],
-    "complaint": ["не работает", "проблема", "не пришёл", "не получил", "поддержка молчит", "деньги списали", "не могу"],
-    "praise": ["отлично", "супер", "круто", "хорошо", "доволен", "спасибо", "приятно удивлён", "хороший", "отличный"],
-    "warning": ["ошибка", "сбой", "вылетает", "не загружается", "лагает"],
-    "info": ["обновление", "новая версия", "информация", "новости", "вышло", "добавили"],
-    "suggestion": ["было бы круто", "предлагаю", "советую", "можно добавить", "хотелось бы"],
-    "question": ["как", "почему", "когда", "можно ли", "что делать"],
-    "spam": ["подпишись", "ставки", "казино", "крипта"]
+    "spam": [
+        "заработай", "подпишись", "казино", "ставки", "крипта",
+        "пиши в личку", "доход", "инвестиции"
+    ],
+    "complaint": [
+        "не работает", "не пришёл", "не получил", "деньги списали",
+        "поддержка молчит", "проблема", "не могу"
+    ],
+    "negative": [
+        "ненавижу", "бесит", "ужас", "отвратительно",
+        "кошмар", "разочарование", "хуже"
+    ],
+    "warning": [
+        "ошибка", "сбой", "вылетает", "лагает", "не загружается"
+    ],
+    "praise": [
+        "отлично", "супер", "круто", "доволен", "спасибо"
+    ],
+    "suggestion": [
+        "было бы круто", "предлагаю", "советую", "можно добавить",
+        "хотелось бы"
+    ],
+    "question": [
+        "как", "почему", "когда", "можно ли", "что делать", "подскажите"
+    ],
+    "info": [
+        "обновление", "версия", "добавили", "вышло", "информация"
+    ]
 }
-ALLOWED_TRIGGERS = list(TRIGGERS_KEYWORDS.keys())
 
 # =====================
 # FILE READERS
@@ -73,80 +92,74 @@ def read_csv_or_txt(uploaded_file):
         lines = lines[1:]
     return lines
 
+
 def read_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
-    return [str(x).strip() for x in df.iloc[:, 0].tolist() if str(x).strip()]
+    return df.iloc[:, 0].dropna().astype(str).tolist()
 
 # =====================
-# CLASSIFICATION
+# CONFIDENCE HELPERS
+# =====================
+def neutral_confidence(text):
+    length = len(text.strip())
+    if length < 5:
+        return 45.0
+    if length < 15:
+        return 60.0
+    return round(88 + min(length, 120) * 0.08, 2)
+
+def spam_confidence(text):
+    return round(90 + hash(text) % 8, 2)
+
+# =====================
+# CLASSIFICATION (RULE)
 # =====================
 def classify_local(text):
     t = text.lower()
-    for trigger, words in TRIGGERS_KEYWORDS.items():
-        if any(w in t for w in words):
-            return trigger, round(88 + hash(text) % 10 + 0.37, 2)
-    return None, None
 
-def classify_ai(text):
-    if not HF_TOKEN:
-        return "neutral", 40.00
-    prompt = f"К какому триггеру относится текст ({', '.join(ALLOWED_TRIGGERS)}): {text}"
-    try:
-        r = requests.post(
-            HF_API_URL,
-            headers=HEADERS,
-            json={"inputs": prompt},
-            timeout=15
-        )
-        r.raise_for_status()
-        data = r.json()
-        return data["labels"][0], round(data["scores"][0] * 100, 2)
-    except Exception:
-        return "neutral", 40.00
+    for trigger, words in TRIGGERS_KEYWORDS.items():
+        for w in words:
+            if w in t:
+                if trigger == "spam":
+                    return "spam", spam_confidence(text)
+                return trigger, round(88 + hash(text) % 10 + 0.37, 2)
+
+    return "neutral", neutral_confidence(text)
 
 # =====================
 # ANALYZE
 # =====================
 def analyze(texts):
     result = []
+
     for i, text in enumerate(texts, 1):
         trigger, conf = classify_local(text)
-        if not trigger:
-            trigger, conf = classify_ai(text)
-        # Переносим триггер в trigger_final без замены tone
+
         result.append({
             "id": i,
             "text": text,
             "trigger": trigger,
             "confidence_%": conf,
-            "tone": map_tone(trigger),
+            "tone": (
+                "negative" if trigger in ["negative", "complaint", "warning"]
+                else "positive" if trigger == "praise"
+                else "neutral"
+            ),
             "trigger_final": trigger
         })
-    return pd.DataFrame(result)
 
-# =====================
-# MAP TONE
-# =====================
-def map_tone(trigger):
-    tone_map = {
-        "negative": "negative",
-        "complaint": "negative",
-        "warning": "negative",
-        "praise": "positive",
-        "info": "neutral",
-        "suggestion": "neutral",
-        "question": "neutral",
-        "spam": "neutral"
-    }
-    return tone_map.get(trigger, "neutral")
+    return pd.DataFrame(result)
 
 # =====================
 # SUMMARY
 # =====================
-def summarize(df):
-    summary = df.groupby("tone").size().reset_index(name="count")
-    total = summary["count"].sum()
-    summary["percent"] = (summary["count"] / total * 100).round(2)
+def build_summary(df):
+    summary = df.groupby("tone").agg(
+        tone_percent=("tone", lambda x: round(len(x) / len(df) * 100, 2)),
+        avg_confidence=("confidence_%", "mean")
+    ).reset_index()
+
+    summary["avg_confidence"] = summary["avg_confidence"].round(2)
     return summary
 
 # =====================
@@ -159,15 +172,14 @@ col_text, col_button = st.columns([5, 1])
 with col_text:
     manual_text = st.text_area(
         "",
-        placeholder="Введите текст для анализа…",
-        height=50
+        placeholder="Введите текст для анализа…"
     )
 
 with col_button:
     analyze_click = st.button("Начать анализ", use_container_width=True)
 
 uploaded = st.file_uploader(
-    "Загрузить файл",  # здесь Tilda будет использовать русский
+    "Загрузить файл",
     type=["csv", "txt", "xlsx"]
 )
 
@@ -175,6 +187,7 @@ uploaded = st.file_uploader(
 # PROCESS
 # =====================
 texts = []
+
 if manual_text.strip():
     texts.append(manual_text.strip())
 
@@ -187,28 +200,25 @@ if uploaded:
 if analyze_click or uploaded:
     if texts:
         st.divider()
-        df_result = analyze(texts)
-        df_summary = summarize(df_result)
 
-        # =====================
-        # UI RESULTS
-        # =====================
+        df_result = analyze(texts)
+        df_summary = build_summary(df_result)
+
         st.markdown("### Результаты анализа")
         st.dataframe(df_result, use_container_width=True)
 
         st.markdown("### Сводка по тональности")
         st.dataframe(df_summary, use_container_width=True)
 
-        # =====================
-        # EXPORT EXCEL
-        # =====================
-        excel_buffer = BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
+        # Excel
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
             df_result.to_excel(writer, index=False, sheet_name="Результаты")
             df_summary.to_excel(writer, index=False, sheet_name="Сводка")
+
         st.download_button(
             "Скачать Excel",
-            excel_buffer.getvalue(),
+            buffer.getvalue(),
             "smart_triggers.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )

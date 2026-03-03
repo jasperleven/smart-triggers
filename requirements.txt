@@ -1,9 +1,6 @@
-streamlit>=1.30.0
+streamlit>=1.31.0
 pandas>=2.0.0
-numpy>=1.24.0
-transformers>=4.36.0
-torch
+chardet
 xlsxwriter
 openpyxl
-chardet
 requests
