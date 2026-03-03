@@ -1,9 +1,7 @@
 import streamlit as st
 import pandas as pd
-import requests
 import chardet
 from io import BytesIO
-import re
 
 # =====================
 # CONFIG
@@ -13,19 +11,15 @@ st.set_page_config(
     layout="wide"
 )
 
-HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-
 # =====================
-# SIDEBAR — TOKEN (скрываем визуально, но оставляем)
+# SIDEBAR — TOKEN (оставлен, но не мешает)
 # =====================
 with st.sidebar.expander("🔑 HuggingFace Token", expanded=False):
     HF_TOKEN = st.text_input(
         "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",
         type="password",
-        help="Используется только при низкой уверенности rule-based"
+        help="Опционально. Используется для будущих AI-улучшений"
     )
-
-HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
 # =====================
 # CSS
@@ -36,8 +30,8 @@ textarea {
     height: 50px !important;
 }
 .stButton > button {
-    background-color: #e74c3c;
-    color: white;
+    background-color: #e74c3c !important;
+    color: white !important;
     height: 50px;
 }
 .stButton {
@@ -47,36 +41,43 @@ textarea {
 """, unsafe_allow_html=True)
 
 # =====================
-# TRIGGERS
+# TRIGGERS (ФИНАЛ)
 # =====================
 TRIGGERS_KEYWORDS = {
     "spam": [
-        "заработай", "подпишись", "казино", "ставки", "крипта",
-        "пиши в личку", "доход", "инвестиции"
+        "заработай", "подпишись", "казино", "ставки",
+        "крипта", "пиши в личку", "доход", "инвестиции"
     ],
     "complaint": [
-        "не работает", "не пришёл", "не получил", "деньги списали",
-        "поддержка молчит", "проблема", "не могу"
+        "не работает", "не пришёл", "не получил",
+        "деньги списали", "поддержка молчит",
+        "проблема", "не могу", "не войти", "не заходит"
+    ],
+    "warning": [
+        "ошибка", "сбой", "вылетает", "лагает",
+        "не загружается", "нестабильно", "долго грузится"
     ],
     "negative": [
         "ненавижу", "бесит", "ужас", "отвратительно",
-        "кошмар", "разочарование", "хуже"
-    ],
-    "warning": [
-        "ошибка", "сбой", "вылетает", "лагает", "не загружается"
-    ],
-    "praise": [
-        "отлично", "супер", "круто", "доволен", "спасибо"
+        "отвратительный", "кошмар", "разочарование",
+        "хуже", "худший"
     ],
     "suggestion": [
-        "было бы круто", "предлагаю", "советую", "можно добавить",
-        "хотелось бы"
+        "было бы круто", "предлагаю", "советую",
+        "можно добавить", "хотелось бы", "хочу предложить"
+    ],
+    "praise": [
+        "отлично", "супер", "круто", "доволен",
+        "спасибо", "отличный", "приятно удивлён"
     ],
     "question": [
-        "как", "почему", "когда", "можно ли", "что делать", "подскажите"
+        "как", "почему", "когда", "можно ли",
+        "что делать", "подскажите",
+        "платно", "бесплатно", "?"
     ],
     "info": [
-        "обновление", "версия", "добавили", "вышло", "информация"
+        "обновление", "версия", "добавили",
+        "вышло", "информация"
     ]
 }
 
@@ -98,7 +99,7 @@ def read_excel(uploaded_file):
     return df.iloc[:, 0].dropna().astype(str).tolist()
 
 # =====================
-# CONFIDENCE HELPERS
+# CONFIDENCE
 # =====================
 def neutral_confidence(text):
     length = len(text.strip())
@@ -108,17 +109,29 @@ def neutral_confidence(text):
         return 60.0
     return round(88 + min(length, 120) * 0.08, 2)
 
+
 def spam_confidence(text):
     return round(90 + hash(text) % 8, 2)
 
 # =====================
-# CLASSIFICATION (RULE)
+# CLASSIFICATION (RULE-BASED)
 # =====================
 def classify_local(text):
     t = text.lower()
 
-    for trigger, words in TRIGGERS_KEYWORDS.items():
-        for w in words:
+    PRIORITY = [
+        "spam",
+        "complaint",
+        "warning",
+        "negative",
+        "suggestion",
+        "praise",
+        "question",
+        "info"
+    ]
+
+    for trigger in PRIORITY:
+        for w in TRIGGERS_KEYWORDS.get(trigger, []):
             if w in t:
                 if trigger == "spam":
                     return "spam", spam_confidence(text)
@@ -135,16 +148,18 @@ def analyze(texts):
     for i, text in enumerate(texts, 1):
         trigger, conf = classify_local(text)
 
+        tone = (
+            "negative" if trigger in ["negative", "complaint", "warning"]
+            else "positive" if trigger == "praise"
+            else "neutral"
+        )
+
         result.append({
             "id": i,
             "text": text,
             "trigger": trigger,
             "confidence_%": conf,
-            "tone": (
-                "negative" if trigger in ["negative", "complaint", "warning"]
-                else "positive" if trigger == "praise"
-                else "neutral"
-            ),
+            "tone": tone,
             "trigger_final": trigger
         })
 
@@ -210,7 +225,7 @@ if analyze_click or uploaded:
         st.markdown("### Сводка по тональности")
         st.dataframe(df_summary, use_container_width=True)
 
-        # Excel
+        # Excel export
         buffer = BytesIO()
         with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
             df_result.to_excel(writer, index=False, sheet_name="Результаты")
