@@ -1,128 +1,75 @@
-import os
-import json
-from typing import List
-from fastapi import FastAPI, HTTPException
+# main.py
+from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
+import os
 
-# =====================
-# OpenAI
-# =====================
-client = OpenAI(
-    api_key=os.getenv("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")
-)
+# Инициализация OpenAI клиента
+# Убедись, что на Render есть переменная окружения OPENAI_API_KEY
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-if not os.getenv("OPENAI_API_KEY"):
-    raise RuntimeError("OPENAI_API_KEY not set")
+app = FastAPI(title="Smart Triggers API")
 
-# =====================
-# FastAPI
-# =====================
-app = FastAPI(
-    title="Smart Triggers API",
-    description="AI-based trigger & tone detection",
-    version="1.0"
-)
+# Модель запроса
+class CommentRequest(BaseModel):
+    comment: str
 
-# =====================
-# Models
-# =====================
-class AnalyzeRequest(BaseModel):
-    texts: List[str]
-
-class AnalyzeItem(BaseModel):
-    id: int
-    text: str
+# Модель ответа
+class CommentResponse(BaseModel):
     trigger: str
-    confidence: float
     tone: str
     tone_percent: float
     avg_confidence: float
 
-# =====================
-# AI PROMPT
-# =====================
-SYSTEM_PROMPT = """
-Ты — аналитический AI, который классифицирует пользовательские комментарии.
+# Триггеризация через OpenAI
+@app.post("/analyze", response_model=CommentResponse)
+async def analyze_comment(request: CommentRequest):
+    prompt = f"""
+    Определи для комментария следующие данные:
+    1. Триггер (коротко, одно слово, например: "жалоба", "вопрос", "похвала")
+    2. Тон (например: "позитивный", "негативный", "нейтральный")
+    3. Вероятность тона (0-100)
+    4. Уровень уверенности в триггере (0-100)
+    
+    Комментарий: "{request.comment}"
+    
+    Ответ в формате JSON:
+    {{
+      "trigger": "",
+      "tone": "",
+      "tone_percent": 0,
+      "avg_confidence": 0
+    }}
+    """
 
-Определи ОДИН основной триггер комментария:
+    # Запрос к OpenAI
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
 
-Возможные триггеры:
-- spam — реклама, мусор, боты
-- complaint — жалоба, возмущение, недовольство
-- warning — угроза, призыв к наказанию, агрессия
-- negative — негативная оценка без прямой жалобы
-- suggestion — предложение, совет
-- praise — поддержка, одобрение
-- question — вопрос или риторический вопрос
-- info — нейтральное сообщение или факт
-- neutral — если триггер не выражен
+    # Получаем текст
+    result_text = response.choices[0].message.content
 
-ВАЖНО:
-- сарказм, ирония, политическая критика = НЕ neutral
-- риторические вопросы = question
-- эмоциональная критика власти или институтов = negative или complaint
-- neutral использовать ТОЛЬКО если реально нет оценки
-
-Верни JSON строго в формате:
-{
-  "trigger": "...",
-  "confidence": число от 0 до 100
-}
-"""
-
-# =====================
-# Helpers
-# =====================
-def tone_from_trigger(trigger: str):
-    if trigger in ["complaint", "warning", "negative"]:
-        return "negative", 100.0
-    if trigger == "praise":
-        return "positive", 100.0
-    return "neutral", 100.0
-
-def classify_text(text: str):
+    # Попытка извлечь JSON
+    import json
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text}
-            ]
-        )
+        data = json.loads(result_text)
+    except:
+        # fallback, если формат нарушен
+        data = {
+            "trigger": "unknown",
+            "tone": "unknown",
+            "tone_percent": 0.0,
+            "avg_confidence": 0.0
+        }
 
-        content = response.choices[0].message.content.strip()
-        data = json.loads(content)
+    return CommentResponse(**data)
 
-        trigger = data.get("trigger", "neutral")
-        confidence = float(data.get("confidence", 50))
 
-        tone, tone_percent = tone_from_trigger(trigger)
-
-        return trigger, confidence, tone, tone_percent
-
-    except Exception as e:
-        return "neutral", 50.0, "neutral", 50.0
-
-# =====================
-# Endpoint
-# =====================
-@app.post("/analyze", response_model=List[AnalyzeItem])
-def analyze(req: AnalyzeRequest):
-    results = []
-
-    for i, text in enumerate(req.texts, start=1):
-        trigger, conf, tone, tone_percent = classify_text(text)
-
-        results.append({
-            "id": i,
-            "text": text,
-            "trigger": trigger,
-            "confidence": conf,
-            "tone": tone,
-            "tone_percent": tone_percent,
-            "avg_confidence": conf
-        })
-
-    return results
+# Для локального теста через uvicorn
+# uvicorn main:app --host 0.0.0.0 --port 10000
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=10000, reload=True)
