@@ -1,12 +1,12 @@
 # main.py
 from fastapi import FastAPI
 from pydantic import BaseModel
-from openai import OpenAI
+import openai
 import os
+import json
 
-# Инициализация OpenAI клиента
-# Убедись, что на Render есть переменная окружения OPENAI_API_KEY
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Инициализация OpenAI через глобальный ключ
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI(title="Smart Triggers API")
 
@@ -25,38 +25,32 @@ class CommentResponse(BaseModel):
 @app.post("/analyze", response_model=CommentResponse)
 async def analyze_comment(request: CommentRequest):
     prompt = f"""
-    Определи для комментария следующие данные:
-    1. Триггер (коротко, одно слово, например: "жалоба", "вопрос", "похвала")
-    2. Тон (например: "позитивный", "негативный", "нейтральный")
-    3. Вероятность тона (0-100)
-    4. Уровень уверенности в триггере (0-100)
-    
-    Комментарий: "{request.comment}"
-    
-    Ответ в формате JSON:
-    {{
-      "trigger": "",
-      "tone": "",
-      "tone_percent": 0,
-      "avg_confidence": 0
-    }}
-    """
+Определи для комментария следующие данные:
+1. Триггер (коротко, одно слово, например: "жалоба", "вопрос", "похвала")
+2. Тон (например: "позитивный", "негативный", "нейтральный")
+3. Вероятность тона (0-100)
+4. Уровень уверенности в триггере (0-100)
 
-    # Запрос к OpenAI
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0
-    )
+Комментарий: "{request.comment}"
 
-    # Получаем текст
-    result_text = response.choices[0].message.content
+Ответ в формате JSON:
+{{
+  "trigger": "",
+  "tone": "",
+  "tone_percent": 0,
+  "avg_confidence": 0
+}}
+"""
 
-    # Попытка извлечь JSON
-    import json
     try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        result_text = response.choices[0].message.content
         data = json.loads(result_text)
-    except:
+    except Exception:
         # fallback, если формат нарушен
         data = {
             "trigger": "unknown",
