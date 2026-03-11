@@ -1,27 +1,31 @@
-import os
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
 
+# Инициализация клиента OpenAI
+client = OpenAI()  # ключ берется из переменной окружения OPENAI_API_KEY
+
 app = FastAPI()
 
-# Инициализация клиента OpenAI с ключом из переменной окружения
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# --- CORS ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # можно заменить на ["https://your-tilde-domain.tilda.ws"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Модель запроса
-class MessageRequest(BaseModel):
-    message: str
+# --- Модель запроса ---
+class ChatRequest(BaseModel):
+    text: str
 
-@app.get("/")
-def root():
-    return {"status": "Smart Triggers API работает"}
-
+# --- Endpoint ---
 @app.post("/chat")
-async def chat(request: MessageRequest):
-    # Отправка запроса в OpenAI
+async def chat(request: ChatRequest):
     response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": request.message}]
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": request.text}]
     )
-    # Возвращаем текст ответа
     return {"response": response.choices[0].message.content}
