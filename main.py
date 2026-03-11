@@ -1,69 +1,107 @@
-# main.py
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import openai
 import os
 import json
 
-# Инициализация OpenAI через глобальный ключ
+# =====================
+# CONFIG
+# =====================
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+ALLOWED_TRIGGERS = [
+    "complaint", "criticism", "negative",
+    "question", "suggestion", "praise",
+    "info", "spam", "neutral"
+]
+
+TRIGGER_TO_TONE = {
+    "complaint": "negative",
+    "criticism": "negative",
+    "negative": "negative",
+    "spam": "neutral",
+    "question": "neutral",
+    "info": "neutral",
+    "suggestion": "neutral",
+    "praise": "positive",
+    "neutral": "neutral"
+}
+
+# =====================
+# APP
+# =====================
 app = FastAPI(title="Smart Triggers API")
 
-# Модель запроса
 class CommentRequest(BaseModel):
     comment: str
 
-# Модель ответа
 class CommentResponse(BaseModel):
     trigger: str
     tone: str
     tone_percent: float
     avg_confidence: float
 
-# Триггеризация через OpenAI
-@app.post("/analyze", response_model=CommentResponse)
-async def analyze_comment(request: CommentRequest):
-    prompt = f"""
-Определи для комментария следующие данные:
-1. Триггер (коротко, одно слово, например: "жалоба", "вопрос", "похвала")
-2. Тон (например: "позитивный", "негативный", "нейтральный")
-3. Вероятность тона (0-100)
-4. Уровень уверенности в триггере (0-100)
+# =====================
+# CORE LOGIC
+# =====================
+def classify_comment(text: str) -> dict:
+    system_prompt = """
+Ты — аналитическая система классификации пользовательских комментариев.
 
-Комментарий: "{request.comment}"
+Задачи:
+1. Определи ОСНОВНОЙ смысловой триггер.
+2. Учитывай сарказм, иронию, агрессию.
+3. Риторические вопросы с негативом — НЕ question.
+4. Используй ТОЛЬКО допустимые триггеры.
 
-Ответ в формате JSON:
-{{
-  "trigger": "",
-  "tone": "",
-  "tone_percent": 0,
-  "avg_confidence": 0
-}}
+Допустимые триггеры:
+complaint, criticism, negative, question, suggestion, praise, info, spam, neutral
+
+Верни строго JSON:
+{
+  "trigger": "...",
+  "confidence": число от 60 до 100
+}
 """
 
+    response = openai.ChatCompletion.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text}
+        ],
+        temperature=0,
+        response_format={"type": "json_object"}
+    )
+
+    data = json.loads(response.choices[0].message.content)
+
+    trigger = data.get("trigger", "neutral")
+    confidence = float(data.get("confidence", 80))
+
+    if trigger not in ALLOWED_TRIGGERS:
+        trigger = "neutral"
+
+    tone = TRIGGER_TO_TONE[trigger]
+
+    return {
+        "trigger": trigger,
+        "tone": tone,
+        "tone_percent": round(confidence, 2),
+        "avg_confidence": round(confidence, 2)
+    }
+
+# =====================
+# ENDPOINT
+# =====================
+@app.post("/analyze", response_model=CommentResponse)
+async def analyze(request: CommentRequest):
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0
-        )
-        result_text = response.choices[0].message.content
-        data = json.loads(result_text)
-    except Exception:
-        # fallback, если формат нарушен
-        data = {
-            "trigger": "unknown",
-            "tone": "unknown",
-            "tone_percent": 0.0,
-            "avg_confidence": 0.0
-        }
-
-    return CommentResponse(**data)
+        return classify_comment(request.comment)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# Для локального теста через uvicorn
-# uvicorn main:app --host 0.0.0.0 --port 10000
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=10000, reload=True)
+@app.get("/")
+def healthcheck():
+    return {"status": "ok"}
