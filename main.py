@@ -3,24 +3,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
 import os
+import json
 
-# ---------- APP ----------
-app = FastAPI()
+client = OpenAI()
 
-# ---------- CORS (обязательно для Tilda) ----------
+app = FastAPI(title="Smart Triggers API")
+
+# ✅ CORS — КРИТИЧНО
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # можно потом сузить
+    allow_origins=["*"],  # позже можно сузить
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------- OpenAI ----------
-# КЛЮЧ БЕРЁТСЯ ИЗ ENV: OPENAI_API_KEY
-client = OpenAI()
-
-# ---------- MODELS ----------
 class ChatRequest(BaseModel):
     text: str
 
@@ -29,46 +26,44 @@ class ChatResponse(BaseModel):
     tone: str
     confidence: float
 
-# ---------- HEALTH CHECK ----------
 @app.get("/")
 def health():
-    return {"status": "ok"}
+    return "Health"
 
-# ---------- CHAT ENDPOINT ----------
 @app.post("/chat", response_model=ChatResponse)
-def chat(data: ChatRequest):
+def chat(req: ChatRequest):
     prompt = f"""
-Проанализируй сообщение пользователя.
+Определи:
+1. trigger (complaint, question, praise, suggestion, info, neutral, spam)
+2. tone (positive, neutral, negative)
+3. confidence (0-100)
 
-Сообщение:
-"{data.text}"
+Текст:
+"{req.text}"
 
-Верни строго JSON:
+Ответ строго JSON:
 {{
-  "trigger": "...",
-  "tone": "...",
-  "confidence": число от 0 до 1
+  "trigger": "",
+  "tone": "",
+  "confidence": 0
 }}
 """
 
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "Ты аналитик пользовательских триггеров."},
-            {"role": "user", "content": prompt}
-        ],
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
         temperature=0
     )
 
-    raw = response.choices[0].message.content
+    content = response.choices[0].message.content
 
     try:
-        parsed = eval(raw)
+        data = json.loads(content)
     except:
-        parsed = {
+        data = {
             "trigger": "unknown",
-            "tone": "unknown",
-            "confidence": 0.0
+            "tone": "neutral",
+            "confidence": 0
         }
 
-    return parsed
+    return data
