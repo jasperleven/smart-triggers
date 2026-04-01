@@ -3,67 +3,83 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
 import os
-import json
 
-client = OpenAI()
+# =========================
+# ИНИЦИАЛИЗАЦИЯ
+# =========================
 
-app = FastAPI(title="Smart Triggers API")
+app = FastAPI()
 
-# ✅ CORS — КРИТИЧНО
+# CORS — ОБЯЗАТЕЛЬНО для Tilda
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # позже можно сузить
-    allow_credentials=True,
+    allow_origins=["*"],   # можно потом заменить на tilda-домен
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+client = OpenAI()  # ключ берётся из переменной окружения OPENAI_API_KEY
+
+
+# =========================
+# SCHEMAS
+# =========================
+
 class ChatRequest(BaseModel):
     text: str
+
 
 class ChatResponse(BaseModel):
     trigger: str
     tone: str
     confidence: float
 
+
+# =========================
+# ROUTES
+# =========================
+
 @app.get("/")
 def health():
-    return "Health"
+    return {"status": "ok"}
+
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
+    text = req.text
+
     prompt = f"""
-Определи:
-1. trigger (complaint, question, praise, suggestion, info, neutral, spam)
-2. tone (positive, neutral, negative)
-3. confidence (0-100)
+Определи триггер, тональность и уверенность текста.
 
-Текст:
-"{req.text}"
+Текст: "{text}"
 
-Ответ строго JSON:
-{{
-  "trigger": "",
-  "tone": "",
-  "confidence": 0
-}}
+Ответь строго в формате:
+trigger: ...
+tone: ...
+confidence: число от 0 до 1
 """
 
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Ты аналитик маркетинговых триггеров."},
+            {"role": "user", "content": prompt},
+        ],
     )
 
     content = response.choices[0].message.content
 
-    try:
-        data = json.loads(content)
-    except:
-        data = {
-            "trigger": "unknown",
-            "tone": "neutral",
-            "confidence": 0
-        }
+    # Простейший парсинг
+    lines = content.split("\n")
+    data = {}
 
-    return data
+    for line in lines:
+        if ":" in line:
+            key, value = line.split(":", 1)
+            data[key.strip()] = value.strip()
+
+    return {
+        "trigger": data.get("trigger", "unknown"),
+        "tone": data.get("tone", "unknown"),
+        "confidence": float(data.get("confidence", 0)),
+    }
