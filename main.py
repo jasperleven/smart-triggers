@@ -1,29 +1,13 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from openai import OpenAI
 import os
-
-# =========================
-# ИНИЦИАЛИЗАЦИЯ
-# =========================
+from openai import OpenAI
 
 app = FastAPI()
 
-# CORS — ОБЯЗАТЕЛЬНО для Tilda
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],   # можно потом заменить на tilda-домен
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# инициализация клиента OpenAI
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-client = OpenAI()  # ключ берётся из переменной окружения OPENAI_API_KEY
-
-
-# =========================
-# SCHEMAS
-# =========================
 
 class ChatRequest(BaseModel):
     text: str
@@ -35,10 +19,6 @@ class ChatResponse(BaseModel):
     confidence: float
 
 
-# =========================
-# ROUTES
-# =========================
-
 @app.get("/")
 def health():
     return {"status": "ok"}
@@ -46,40 +26,35 @@ def health():
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    text = req.text
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты анализируешь текст и возвращаешь JSON строго в формате:\n"
+                        "{trigger: string, tone: string, confidence: number от 0 до 1}"
+                    ),
+                },
+                {"role": "user", "content": req.text},
+            ],
+            temperature=0.2,
+        )
 
-    prompt = f"""
-Определи триггер, тональность и уверенность текста.
+        content = response.choices[0].message.content
 
-Текст: "{text}"
+        # fallback, если модель ответила не JSON
+        return {
+            "trigger": "unknown",
+            "tone": "neutral",
+            "confidence": 0.0,
+        }
 
-Ответь строго в формате:
-trigger: ...
-tone: ...
-confidence: число от 0 до 1
-"""
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "Ты аналитик маркетинговых триггеров."},
-            {"role": "user", "content": prompt},
-        ],
-    )
-
-    content = response.choices[0].message.content
-
-    # Простейший парсинг
-    lines = content.split("\n")
-    data = {}
-
-    for line in lines:
-        if ":" in line:
-            key, value = line.split(":", 1)
-            data[key.strip()] = value.strip()
-
-    return {
-        "trigger": data.get("trigger", "unknown"),
-        "tone": data.get("tone", "unknown"),
-        "confidence": float(data.get("confidence", 0)),
-    }
+    except Exception as e:
+        print("ERROR:", e)
+        return {
+            "trigger": "error",
+            "tone": "error",
+            "confidence": 0.0,
+        }
