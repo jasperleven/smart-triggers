@@ -1,11 +1,10 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-import os
 from openai import OpenAI
+import os
 
 app = FastAPI()
 
-# инициализация клиента OpenAI
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
@@ -26,35 +25,33 @@ def health():
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
+    prompt = f"""
+Определи для текста:
+- trigger (complaint, warning, negative, praise, suggestion, question, info, spam, neutral)
+- tone (positive, neutral, negative)
+- confidence (0–1)
+
+Ответь строго JSON.
+
+Текст:
+{req.text}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+
+    content = response.choices[0].message.content
+
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Ты анализируешь текст и возвращаешь JSON строго в формате:\n"
-                        "{trigger: string, tone: string, confidence: number от 0 до 1}"
-                    ),
-                },
-                {"role": "user", "content": req.text},
-            ],
-            temperature=0.2,
-        )
-
-        content = response.choices[0].message.content
-
-        # fallback, если модель ответила не JSON
-        return {
+        data = eval(content)
+    except Exception:
+        data = {
             "trigger": "unknown",
-            "tone": "neutral",
-            "confidence": 0.0,
+            "tone": "unknown",
+            "confidence": 0.0
         }
 
-    except Exception as e:
-        print("ERROR:", e)
-        return {
-            "trigger": "error",
-            "tone": "error",
-            "confidence": 0.0,
-        }
+    return data
