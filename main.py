@@ -1,51 +1,52 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+import httpx
 import os
-from openai import OpenAI
 
-app = FastAPI()
+app = FastAPI(title="Smart Triggers API")
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Получаем ключ Grok из переменных окружения Render
+GROK_API_KEY = os.getenv("GROK_API_KEY")
+if not GROK_API_KEY:
+    raise ValueError("GROK_API_KEY не установлен в переменных окружения Render")
 
+# Модель запроса
 class ChatRequest(BaseModel):
     text: str
 
+# Модель ответа
 class ChatResponse(BaseModel):
     trigger: str
     tone: str
-    confidence: int
+    confidence: float
 
-@app.get("/")
-def health():
-    return {"status": "ok"}
-
+# Эндпоинт
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):
+async def chat(request: ChatRequest):
     try:
-        # НОВЫЙ, стабильный Responses API
-        resp = client.responses.create(
-            model="gpt-4.1-mini",
-            input=[
-                {
-                    "role": "system",
-                    "content": "Ответь строго в JSON: trigger, tone, confidence (0-100)."
-                },
-                {
-                    "role": "user",
-                    "content": req.text
-                }
-            ]
-        )
-
-        text = resp.output_text
-        # временно просто возвращаем, чтобы проверить, что ответ есть
-        return {
-            "trigger": "ok",
-            "tone": text[:50],
-            "confidence": 100
+        headers = {
+            "Authorization": f"Bearer {GROK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "prompt": request.text,
+            "max_tokens": 50
         }
 
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(
+                "https://api.grok.ai/v1/completions",
+                json=payload,
+                headers=headers
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        # Простая заглушка для примера обработки результата
+        result = data.get("choices", [{}])[0].get("text", "")
+        return ChatResponse(trigger="success", tone="neutral", confidence=1.0)
+
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
-        # ВАЖНО: логируем и НЕ роняем сервис молча
-        print("OPENAI ERROR >>>", repr(e))
         raise HTTPException(status_code=500, detail=str(e))
