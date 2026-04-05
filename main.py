@@ -1,13 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
 from openai import OpenAI
 
 app = FastAPI()
 
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
-)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class ChatRequest(BaseModel):
     text: str
@@ -19,17 +17,18 @@ class ChatResponse(BaseModel):
 
 @app.get("/")
 def health():
-    return "OK"
+    return {"status": "ok"}
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
+        # НОВЫЙ, стабильный Responses API
+        resp = client.responses.create(
+            model="gpt-4.1-mini",
+            input=[
                 {
                     "role": "system",
-                    "content": "Определи тип триггера, тон сообщения и уверенность от 0 до 100. Ответ строго в JSON."
+                    "content": "Ответь строго в JSON: trigger, tone, confidence (0-100)."
                 },
                 {
                     "role": "user",
@@ -38,15 +37,15 @@ def chat(req: ChatRequest):
             ]
         )
 
-        content = response.choices[0].message.content
-
-        # временно — просто вернём текст, чтобы убедиться что OpenAI отвечает
+        text = resp.output_text
+        # временно просто возвращаем, чтобы проверить, что ответ есть
         return {
             "trigger": "ok",
-            "tone": content[:30],
+            "tone": text[:50],
             "confidence": 100
         }
 
     except Exception as e:
-        print("OPENAI ERROR:", str(e))
-        raise e
+        # ВАЖНО: логируем и НЕ роняем сервис молча
+        print("OPENAI ERROR >>>", repr(e))
+        raise HTTPException(status_code=500, detail=str(e))
