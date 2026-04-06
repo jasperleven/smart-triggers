@@ -4,16 +4,14 @@ import time
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from openai import OpenAI
-from openai.error import OpenAIError, RateLimitError, APIError
 
 # ===== ENV =====
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 if not GROK_API_KEY:
     raise RuntimeError("GROK_API_KEY not set")
 
-# ===== CONFIG =====
-MODEL_NAME = "grok-2"  # стабильная модель Grok
-MAX_RETRIES = 3         # количество повторов при ошибках
+MODEL_NAME = "grok-2"
+MAX_RETRIES = 3
 
 # ===== CLIENT =====
 client = OpenAI(
@@ -41,9 +39,6 @@ def health():
 # ===== MAIN ENDPOINT =====
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    """
-    Анализ текста: возвращает trigger, tone и confidence
-    """
     prompt = (
         "Ты классификатор текста. "
         "Определи:\n"
@@ -66,7 +61,7 @@ def chat(req: ChatRequest):
             )
 
             content = completion.choices[0].message.content.strip()
-            data = json.loads(content)  # безопасный парсинг JSON
+            data = json.loads(content)
 
             return ChatResponse(
                 trigger=data.get("trigger", "unknown"),
@@ -74,17 +69,17 @@ def chat(req: ChatRequest):
                 confidence=float(data.get("confidence", 0))
             )
 
-        except RateLimitError:
-            if attempt < MAX_RETRIES:
-                time.sleep(2 ** attempt)  # exponential backoff
+        except OpenAI.OpenAIError as e:
+            status = getattr(e, "http_status", None)
+            if status == 429 and attempt < MAX_RETRIES:
+                time.sleep(2 ** attempt)
                 continue
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-        except (APIError, OpenAIError, json.JSONDecodeError) as e:
             if attempt < MAX_RETRIES:
                 time.sleep(1)
                 continue
             raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
 
-    # Fallback: если Grok не отвечает, возвращаем дефолт
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=500, detail="Invalid JSON from AI")
+
     return ChatResponse(trigger="unknown", tone="neutral", confidence=0.0)
