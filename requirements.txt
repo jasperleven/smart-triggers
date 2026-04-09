@@ -3,4 +3,5 @@ uvicorn==0.23.2
 pydantic==2.6.0
 httpx>=0.28.0,<0.29.0
 pandas==2.1.1
+numpy==1.26.4
 xlsxwriter==3.1.1
