@@ -1,6 +1,6 @@
 fastapi==0.109.0
 uvicorn==0.23.2
 pydantic==2.6.0
-httpx==1.1.0
+httpx>=0.28.0,<0.29.0
 pandas==2.1.1
 xlsxwriter==3.1.1
