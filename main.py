@@ -1,93 +1,97 @@
-from fastapi import FastAPI, HTTPException
+# main.py
+import os
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import re
+import pandas as pd
+from io import BytesIO
+import httpx
+from fastapi.responses import StreamingResponse, JSONResponse
 
-app = FastAPI()
+GROK_API_KEY = os.environ.get("GROK_API_KEY")
+GROK_API_URL = "https://api.openai.com/v1/grok-beta"
 
-# CORS — обязательно для Tilda
+app = FastAPI(title="Smart Triggers via Grok")
+
+# ===== CORS (для Тильды или фронта) =====
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # при желании ограничить фронтом
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ====== MODELS ======
-
-class ChatRequest(BaseModel):
+# ===== Models =====
+class TextRequest(BaseModel):
     text: str
 
-class ChatResponse(BaseModel):
-    trigger: str
-    tone: str
-    confidence: float
-    response: str
-
-
-# ====== SIMPLE SMART TRIGGERS LOGIC ======
-
-def detect_trigger(text: str) -> tuple[str, float]:
-    text = text.lower()
-
-    triggers = {
-        "price_request": [
-            "цена", "стоимость", "сколько стоит", "прайс"
-        ],
-        "interest": [
-            "расскажи", "что это", "как работает", "что умеет"
-        ],
-        "support": [
-            "не работает", "ошибка", "проблема", "сломалось"
-        ],
-        "greeting": [
-            "привет", "здравствуйте", "алло", "ты тут"
-        ]
+# ===== Helpers =====
+def analyze_text_grok(text: str):
+    headers = {
+        "Authorization": f"Bearer {GROK_API_KEY}",
+        "Content-Type": "application/json"
     }
-
-    for trigger, keywords in triggers.items():
-        for kw in keywords:
-            if kw in text:
-                return trigger, 0.8
-
-    return "unknown", 0.4
-
-
-def detect_tone(text: str) -> str:
-    if re.search(r"[!?]{2,}", text):
-        return "emotional"
-    if any(word in text.lower() for word in ["пожалуйста", "спасибо"]):
-        return "polite"
-    return "neutral"
-
-
-def generate_response(trigger: str) -> str:
-    responses = {
-        "price_request": "Могу подсказать по стоимости. Уточни, что именно тебя интересует.",
-        "interest": "С удовольствием расскажу. Что именно хочешь узнать?",
-        "support": "Давай разберёмся. Опиши проблему подробнее.",
-        "greeting": "Да, я на связи 🙂",
-        "unknown": "Я тебя понял. Можешь уточнить запрос?"
+    payload = {"input": text}
+    with httpx.Client(timeout=60) as client:
+        resp = client.post(f"{GROK_API_URL}/analyze", json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    # пример структуры, адаптируй под реальный ответ Grok
+    result = {
+        "trigger": data.get("trigger", "neutral"),
+        "tone": data.get("tone", "neutral"),
+        "confidence": data.get("confidence", 0),
+        "response": data.get("response", "")
     }
+    return result
 
-    return responses.get(trigger, responses["unknown"])
+def process_file(file: UploadFile):
+    if file.filename.endswith(".csv"):
+        df = pd.read_csv(file.file)
+    else:
+        df = pd.read_excel(file.file)
 
+    if "text" not in df.columns:
+        return None, "В файле должна быть колонка 'text'"
 
-# ====== ENDPOINT ======
+    results = []
+    for i, txt in enumerate(df["text"].astype(str), 1):
+        analysis = analyze_text_grok(txt)
+        row = {
+            "id": i,
+            "text": txt,
+            **analysis
+        }
+        results.append(row)
 
-@app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
-    if not request.text.strip():
-        raise HTTPException(status_code=400, detail="Text is empty")
+    df_result = pd.DataFrame(results)
 
-    trigger, confidence = detect_trigger(request.text)
-    tone = detect_tone(request.text)
-    response_text = generate_response(trigger)
+    # Excel в байты
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        df_result.to_excel(writer, index=False, sheet_name="results")
+    buffer.seek(0)
+    return buffer, None
 
-    return ChatResponse(
-        trigger=trigger,
-        tone=tone,
-        confidence=confidence,
-        response=response_text
+# ===== Endpoints =====
+@app.post("/chat")
+def chat_endpoint(req: TextRequest):
+    result = analyze_text_grok(req.text)
+    return JSONResponse(content=result)
+
+@app.post("/upload")
+def upload_file(file: UploadFile = File(...)):
+    buffer, err = process_file(file)
+    if err:
+        return JSONResponse(status_code=422, content={"detail": err})
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={file.filename.split('.')[0]}_results.xlsx"}
     )
+
+# ===== Test endpoint =====
+@app.get("/")
+def root():
+    return {"status": "Smart Triggers via Grok is running"}
