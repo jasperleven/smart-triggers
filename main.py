@@ -1,97 +1,131 @@
-# main.py
 import os
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+import io
 import pandas as pd
-from io import BytesIO
 import httpx
-from fastapi.responses import StreamingResponse, JSONResponse
 
-GROK_API_KEY = os.environ.get("GROK_API_KEY")
-GROK_API_URL = "https://api.openai.com/v1/grok-beta"
+from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
-app = FastAPI(title="Smart Triggers via Grok")
+# ======================
+# CONFIG
+# ======================
 
-# ===== CORS (для Тильды или фронта) =====
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = "llama3-70b-8192"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+# ======================
+# APP
+# ======================
+
+app = FastAPI()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # при желании ограничить фронтом
+    allow_origins=["*"],  # для Tilda
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ===== Models =====
-class TextRequest(BaseModel):
-    text: str
+# ======================
+# SCHEMAS
+# ======================
 
-# ===== Helpers =====
-def analyze_text_grok(text: str):
+class ChatRequest(BaseModel):
+    text: str
+    trigger: str | None = None
+    tone: str | None = None
+    confidence: str | None = None
+
+# ======================
+# HELPERS
+# ======================
+
+async def call_groq(prompt: str) -> str:
     headers = {
-        "Authorization": f"Bearer {GROK_API_KEY}",
+        "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    payload = {"input": text}
-    with httpx.Client(timeout=60) as client:
-        resp = client.post(f"{GROK_API_URL}/analyze", json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-    # пример структуры, адаптируй под реальный ответ Grok
-    result = {
-        "trigger": data.get("trigger", "neutral"),
-        "tone": data.get("tone", "neutral"),
-        "confidence": data.get("confidence", 0),
-        "response": data.get("response", "")
+
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": "You are a marketing copywriter and analyst."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.7
     }
-    return result
 
-def process_file(file: UploadFile):
-    if file.filename.endswith(".csv"):
-        df = pd.read_csv(file.file)
-    else:
-        df = pd.read_excel(file.file)
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(GROQ_URL, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
 
-    if "text" not in df.columns:
-        return None, "В файле должна быть колонка 'text'"
+# ======================
+# ENDPOINTS
+# ======================
 
-    results = []
-    for i, txt in enumerate(df["text"].astype(str), 1):
-        analysis = analyze_text_grok(txt)
-        row = {
-            "id": i,
-            "text": txt,
-            **analysis
-        }
-        results.append(row)
-
-    df_result = pd.DataFrame(results)
-
-    # Excel в байты
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-        df_result.to_excel(writer, index=False, sheet_name="results")
-    buffer.seek(0)
-    return buffer, None
-
-# ===== Endpoints =====
 @app.post("/chat")
-def chat_endpoint(req: TextRequest):
-    result = analyze_text_grok(req.text)
-    return JSONResponse(content=result)
+async def chat(req: ChatRequest):
+    prompt = f"""
+Текст:
+{req.text}
+
+Триггер: {req.trigger or "не указан"}
+Тон: {req.tone or "не указан"}
+Уровень уверенности: {req.confidence or "не указан"}
+
+Сделай улучшенную версию текста.
+"""
+
+    result = await call_groq(prompt)
+
+    return JSONResponse({"result": result})
+
 
 @app.post("/upload")
-def upload_file(file: UploadFile = File(...)):
-    buffer, err = process_file(file)
-    if err:
-        return JSONResponse(status_code=422, content={"detail": err})
-    return StreamingResponse(
-        buffer,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={file.filename.split('.')[0]}_results.xlsx"}
-    )
+async def upload_excel(file: UploadFile = File(...)):
+    content = await file.read()
+    df = pd.read_excel(io.BytesIO(content))
 
-# ===== Test endpoint =====
-@app.get("/")
-def root():
-    return {"status": "Smart Triggers via Grok is running"}
+    return JSONResponse({
+        "rows": len(df),
+        "columns": list(df.columns)
+    })
+
+
+@app.post("/process-excel")
+async def process_excel(file: UploadFile = File(...)):
+    content = await file.read()
+    df = pd.read_excel(io.BytesIO(content))
+
+    # 👇 ПРИМЕР: обработка каждой строки через ИИ
+    results = []
+
+    for _, row in df.iterrows():
+        text = str(row[0])
+
+        improved = await call_groq(
+            f"Улучши маркетинговый текст:\n{text}"
+        )
+
+        results.append(improved)
+
+    df["AI_RESULT"] = results
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False)
+
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": "attachment; filename=result.xlsx"
+        }
+    )
