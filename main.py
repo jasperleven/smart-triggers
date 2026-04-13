@@ -47,20 +47,20 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    payload = {
-        "model": "grok-beta",
-        "messages": [
-            {
-                "role": "system",
-                "content": "Ты ассистент Smart Triggers. Отвечай кратко и по делу."
-            },
-            {
-                "role": "user",
-                "content": req.text
-            }
-        ],
-        "temperature": 0.3
-    }
+payload = {
+    "model": "grok-2",
+    "messages": [
+        {
+            "role": "system",
+            "content": "Ты ассистент Smart Triggers. Отвечай кратко и по делу."
+        },
+        {
+            "role": "user",
+            "content": req.text
+        }
+    ],
+    "temperature": 0.3
+}
 
     headers = {
         "Authorization": f"Bearer {GROK_API_KEY}",
