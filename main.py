@@ -1,51 +1,32 @@
-import os
-import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import httpx
+import os
 
-# =====================
-# CONFIG
-# =====================
-GROK_API_KEY = os.getenv("GROK_API_KEY")  # ← ИМЕННО ТАК
-GROK_MODEL = "llama3-70b-8192"
-
-if not GROK_API_KEY:
-    raise RuntimeError("GROK_API_KEY is not set")
-
-# =====================
-# APP
-# =====================
 app = FastAPI()
 
+# CORS ДЛЯ TILDA
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # обязательно для Tilda
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# =====================
-# SCHEMAS
-# =====================
+GROK_API_KEY = os.getenv("GROK_API_KEY")
+GROK_URL = "https://api.x.ai/v1/chat/completions"
+
 class ChatRequest(BaseModel):
     text: str
 
-class ChatResponse(BaseModel):
-    response: str
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    if not GROK_API_KEY:
+        return {"error": "GROK_API_KEY not set"}
 
-# =====================
-# GROK CALL
-# =====================
-async def call_grok(text: str) -> str:
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROK_API_KEY}",
-        "Content-Type": "application/json",
-    }
     payload = {
-        "model": GROK_MODEL,
+        "model": "grok-2-latest",
         "messages": [
             {
                 "role": "system",
@@ -53,22 +34,30 @@ async def call_grok(text: str) -> str:
             },
             {
                 "role": "user",
-                "content": text
+                "content": req.text
             }
         ],
-        "temperature": 0.3,
+        "temperature": 0.3
+    }
+
+    headers = {
+        "Authorization": f"Bearer {GROK_API_KEY}",
+        "Content-Type": "application/json"
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(url, headers=headers, json=payload)
-        r.raise_for_status()
-        data = r.json()
-        return data["choices"][0]["message"]["content"]
+        r = await client.post(GROK_URL, json=payload, headers=headers)
 
-# =====================
-# ENDPOINT
-# =====================
-@app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    answer = await call_grok(req.text)
-    return {"response": answer}
+    if r.status_code != 200:
+        return {
+            "error": "Grok request failed",
+            "status": r.status_code,
+            "details": r.text
+        }
+
+    data = r.json()
+    answer = data["choices"][0]["message"]["content"]
+
+    return {
+        "response": answer
+    }
