@@ -6,7 +6,9 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
+# ======================
 # CORS (обязательно для Tilda)
+# ======================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,25 +17,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ====== CONFIG ======
+# ======================
+# ENV
+# ======================
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 
 GROK_URL = "https://api.x.ai/v1/chat/completions"
-
-# ВАЖНО: актуальная модель (не grok-2!)
 MODEL = "grok-beta"
 
-
-# ====== INPUT ======
+# ======================
+# Request schema
+# ======================
 class ChatRequest(BaseModel):
     text: str
 
 
-# ====== ROUTE ======
+# ======================
+# CHAT ENDPOINT
+# ======================
 @app.post("/chat")
 async def chat(req: ChatRequest):
 
-    user_text = req.text
+    if not GROK_API_KEY:
+        return {
+            "text": "❌ Нет GROK_API_KEY на сервере",
+            "trigger": "error",
+            "tone": "neutral",
+            "confidence": 0
+        }
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -46,8 +57,8 @@ async def chat(req: ChatRequest):
                 json={
                     "model": MODEL,
                     "messages": [
-                        {"role": "system", "content": "Ты полезный ассистент для бизнеса."},
-                        {"role": "user", "content": user_text}
+                        {"role": "system", "content": "Ты полезный бизнес-ассистент."},
+                        {"role": "user", "content": req.text}
                     ],
                     "temperature": 0.7,
                 },
@@ -55,11 +66,25 @@ async def chat(req: ChatRequest):
 
         data = response.json()
 
-        # защита от падений Grok
-        try:
-            answer = data["choices"][0]["message"]["content"]
-        except:
-            answer = "Ошибка ответа модели"
+        # ======================
+        # SAFE PARSING (без падений)
+        # ======================
+        if response.status_code != 200:
+            return {
+                "text": f"Grok error: {data}",
+                "trigger": "error",
+                "tone": "neutral",
+                "confidence": 0
+            }
+
+        answer = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content")
+        )
+
+        if not answer:
+            answer = str(data)
 
         return {
             "text": answer,
@@ -78,6 +103,9 @@ async def chat(req: ChatRequest):
         }
 
 
+# ======================
+# HEALTHCHECK
+# ======================
 @app.get("/")
 def root():
     return {"status": "ok"}
